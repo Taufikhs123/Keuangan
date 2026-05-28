@@ -129,9 +129,26 @@ th.r,td.r{text-align:right}
 .add-form h4{font-size:13px;color:var(--primary);margin-bottom:12px;font-weight:600}
 
 /* MONTH SELECTOR */
-.month-nav{display:flex;align-items:center;gap:6px}
+.month-nav{display:flex;align-items:center;gap:6px;position:relative}
 .month-nav select{border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;background:var(--white);cursor:pointer;outline:none}
 .month-nav select:focus{border-color:var(--primary)}
+.ym-btn{background:var(--white);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--text);transition:all .15s}
+.ym-btn:hover{border-color:var(--primary);background:#f1f8f5}
+.ym-btn .arrow{font-size:9px;opacity:.6}
+.ym-popup{position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:12px;z-index:200;min-width:260px}
+.ym-popup .ym-year-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border-light)}
+.ym-popup .ym-year-row button{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text)}
+.ym-popup .ym-year-row button:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+.ym-popup .ym-year-label{font-size:16px;font-weight:700;color:var(--primary)}
+.ym-popup .ym-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.ym-popup .ym-mo{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;text-align:center;color:var(--text);transition:all .1s}
+.ym-popup .ym-mo:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+.ym-popup .ym-mo.has-data{background:#e8f5e9;border-color:var(--accent-light);font-weight:600}
+.ym-popup .ym-mo.has-data:hover{background:var(--primary);color:#fff}
+.ym-popup .ym-mo.active{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:700}
+.ym-popup .ym-today{margin-top:8px;padding-top:8px;border-top:1px solid var(--border-light);display:flex;justify-content:center}
+.ym-popup .ym-today button{background:transparent;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer}
+.ym-popup .ym-today button:hover{text-decoration:underline}
 
 /* DONUT */
 .donut-wrap{display:flex;align-items:center;gap:24px;flex-wrap:wrap;justify-content:center}
@@ -380,6 +397,127 @@ function confirmAddMonth(){
   saveAll();closeModal();render();
 }
 
+// ===== Month/Year Picker (Dashboard) =====
+let _ymPickerYear=null;
+function renderYMPicker(){
+  if(_ymPickerYear==null)_ymPickerYear=parseInt(selYear);
+  const shortMonths=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const yearStr=String(_ymPickerYear);
+  return `<div class="month-nav">
+    <button class="ym-btn" id="ym-trigger" onclick="toggleYMPicker(event)">
+      <span>${selMonth} ${selYear}</span><span class="arrow">▼</span>
+    </button>
+    <div class="ym-popup" id="ym-popup" style="display:none">
+      <div class="ym-year-row">
+        <button onclick="ymChangeYear(-1)">‹</button>
+        <span class="ym-year-label" id="ym-year-label">${yearStr}</span>
+        <button onclick="ymChangeYear(1)">›</button>
+      </div>
+      <div class="ym-grid" id="ym-grid">
+        ${MONTH_NAMES_ID.map((m,i)=>{
+          const hasData=DATA[yearStr]&&DATA[yearStr][m]&&DATA[yearStr][m].length>0;
+          const active=yearStr===selYear&&m===selMonth;
+          return `<button class="ym-mo${hasData?' has-data':''}${active?' active':''}" onclick="ymSelectMonth('${m}')">${shortMonths[i]}</button>`;
+        }).join('')}
+      </div>
+      <div class="ym-today"><button onclick="ymGoToday()">Hari Ini</button></div>
+    </div>
+  </div>`;
+}
+function attachYMPickerHandlers(){
+  document.removeEventListener('click',ymOutsideClick);
+  setTimeout(()=>document.addEventListener('click',ymOutsideClick),50);
+}
+function ymOutsideClick(e){
+  const popup=document.getElementById('ym-popup');
+  const trigger=document.getElementById('ym-trigger');
+  if(!popup||!trigger)return;
+  if(popup.style.display==='none')return;
+  if(trigger.contains(e.target)||popup.contains(e.target))return;
+  popup.style.display='none';
+}
+function toggleYMPicker(e){
+  if(e)e.stopPropagation();
+  const popup=document.getElementById('ym-popup');
+  if(!popup)return;
+  popup.style.display=popup.style.display==='none'?'block':'none';
+}
+function ymChangeYear(delta){
+  _ymPickerYear+=delta;
+  refreshYMGrid();
+}
+function refreshYMGrid(){
+  const yearStr=String(_ymPickerYear);
+  document.getElementById('ym-year-label').textContent=yearStr;
+  const shortMonths=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  document.getElementById('ym-grid').innerHTML=MONTH_NAMES_ID.map((m,i)=>{
+    const hasData=DATA[yearStr]&&DATA[yearStr][m]&&DATA[yearStr][m].length>0;
+    const active=yearStr===selYear&&m===selMonth;
+    return `<button class="ym-mo${hasData?' has-data':''}${active?' active':''}" onclick="ymSelectMonth('${m}')">${shortMonths[i]}</button>`;
+  }).join('');
+}
+function ymSelectMonth(m){
+  selYear=String(_ymPickerYear);
+  selMonth=m;
+  _ymPickerYear=null;
+  render();
+}
+function ymGoToday(){
+  const now=new Date();
+  selYear=String(now.getFullYear());
+  selMonth=MONTH_NAMES_ID[now.getMonth()];
+  _ymPickerYear=null;
+  render();
+}
+
+// ===== Year Picker (Laporan) =====
+let _yearPickerOpen=false;
+function renderYearPicker(){
+  const curYear=new Date().getFullYear();
+  const years=[];
+  const yearsInData=Object.keys(DATA).map(y=>parseInt(y)).filter(y=>!isNaN(y));
+  const minY=Math.min(curYear-2,...yearsInData);
+  const maxY=Math.max(curYear+1,...yearsInData);
+  for(let y=minY;y<=maxY;y++)years.push(y);
+  return `<div class="month-nav">
+    <button class="ym-btn" onclick="yearPrev()" style="padding:6px 10px">‹</button>
+    <button class="ym-btn" id="yp-trigger" onclick="toggleYearPicker(event)">
+      <span>${selYear}</span><span class="arrow">▼</span>
+    </button>
+    <button class="ym-btn" onclick="yearNext()" style="padding:6px 10px">›</button>
+    <div class="ym-popup" id="yp-popup" style="display:none;min-width:180px">
+      <div class="ym-grid" style="grid-template-columns:repeat(3,1fr)">
+        ${years.map(y=>{
+          const hasData=DATA[String(y)]&&Object.keys(DATA[String(y)]).length>0;
+          const active=String(y)===selYear;
+          return `<button class="ym-mo${hasData?' has-data':''}${active?' active':''}" onclick="yearSelect(${y})">${y}</button>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+function attachYearPickerHandlers(){
+  document.removeEventListener('click',ypOutsideClick);
+  setTimeout(()=>document.addEventListener('click',ypOutsideClick),50);
+}
+function ypOutsideClick(e){
+  const popup=document.getElementById('yp-popup');
+  const trigger=document.getElementById('yp-trigger');
+  if(!popup||!trigger)return;
+  if(popup.style.display==='none')return;
+  if(trigger.contains(e.target)||popup.contains(e.target))return;
+  popup.style.display='none';
+}
+function toggleYearPicker(e){
+  if(e)e.stopPropagation();
+  const popup=document.getElementById('yp-popup');
+  if(!popup)return;
+  popup.style.display=popup.style.display==='none'?'block':'none';
+}
+function yearPrev(){selYear=String(parseInt(selYear)-1);render();}
+function yearNext(){selYear=String(parseInt(selYear)+1);render();}
+function yearSelect(y){selYear=String(y);render();}
+
 // Donut chart drawing
 function drawDonut(canvasId,data,size=160){
   setTimeout(()=>{
@@ -513,12 +651,9 @@ function render(){
 
 // ===================== DASHBOARD =====================
 function renderDash(el,tr){
-  // month selector in topbar (always shown, with current month + "+ Bulan Baru" option)
-  const pairs=getYMPairs();
-  tr.innerHTML=`<div class="month-nav" style="display:flex;gap:6px;align-items:center">
-    <select id="sel-ym" onchange="onYMChange()">${pairs.map(p=>`<option value="${p.y}|${p.m}" ${p.y===selYear&&p.m===selMonth?'selected':''}>${p.m} ${p.y}</option>`).join('')}</select>
-    <button class="btn btn-o btn-sm" onclick="addNewMonth()" style="padding:6px 10px;color:var(--primary);border-color:var(--primary)" title="Tambah bulan baru">+ Bulan</button>
-  </div>`;
+  // month/year picker in topbar
+  tr.innerHTML=renderYMPicker();
+  attachYMPickerHandlers();
 
   const ent=DATA[selYear]?.[selMonth]||[];
   reCalc(ent);
@@ -683,12 +818,8 @@ function delTx(i){
 
 // ===================== LAPORAN =====================
 function renderLaporan(el,tr){
-  const years=Object.keys(DATA).sort();
-  // Always include current year
-  const curYear=String(new Date().getFullYear());
-  if(!years.includes(curYear))years.push(curYear);
-  years.sort();
-  tr.innerHTML=`<div class="month-nav"><select id="sel-yr" onchange="selYear=this.value;render()">${years.map(y=>`<option value="${y}" ${y===selYear?'selected':''}>${y}</option>`).join('')}</select></div>`;
+  tr.innerHTML=renderYearPicker();
+  attachYearPickerHandlers();
 
   const months=DATA[selYear]||{};
   const rows=[];let tIn=0,tOut=0;
