@@ -47,9 +47,23 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--
 .menu-item.active svg{opacity:1}
 
 /* TOPBAR */
-.topbar{position:fixed;top:0;left:var(--sidebar-w);right:0;height:54px;background:var(--white);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;z-index:50}
+.topbar{position:fixed;top:0;left:var(--sidebar-w);right:0;height:54px;background:var(--white);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 180px 0 24px;z-index:50}
 .topbar h1{font-size:16px;font-weight:600}
 .topbar-right{display:flex;align-items:center;gap:10px}
+.sync-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;border:1px solid transparent;user-select:none}
+.sync-chip:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.sync-chip.connected{background:#d4edda;color:#155724;border-color:#28a745}
+.sync-chip.syncing{background:#fff3cd;color:#856404;border-color:#ffc107}
+.sync-chip.error{background:#f8d7da;color:#721c24;border-color:#dc3545}
+.sync-chip.disconnected{background:#e9ecef;color:#6c757d;border-color:#adb5bd}
+.sync-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.sync-chip.connected .sync-dot{background:#28a745;box-shadow:0 0 0 0 rgba(40,167,69,.7);animation:pulse 2s infinite}
+.sync-chip.syncing .sync-dot{background:#ffc107;animation:spin 1s linear infinite}
+.sync-chip.error .sync-dot{background:#dc3545}
+.sync-chip.disconnected .sync-dot{background:#adb5bd}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(40,167,69,.7)}70%{box-shadow:0 0 0 8px rgba(40,167,69,0)}100%{box-shadow:0 0 0 0 rgba(40,167,69,0)}}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+@media(max-width:768px){.sync-chip-text{display:none}.sync-chip{padding:6px 8px}}
 .burger{display:none;background:none;border:none;font-size:22px;cursor:pointer;color:var(--text);margin-right:10px}
 
 /* MAIN */
@@ -218,6 +232,12 @@ th.r,td.r{text-align:right}
   <div class="topbar-right" id="topbar-right"></div>
 </header>
 
+<!-- Floating Sync Indicator (always visible, top-right) -->
+<div id="sync-chip" class="sync-chip disconnected" onclick="go('pengaturan')" title="Klik untuk pengaturan sync" style="position:fixed;top:14px;right:20px;z-index:300;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+  <span class="sync-dot"></span>
+  <span class="sync-chip-text" id="sync-chip-text">Not Connected</span>
+</div>
+
 <main class="main" id="main"></main>
 <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)">
 
@@ -291,12 +311,74 @@ function getCatIcon(id){const c=CATEGORIES.find(c=>c.id===id);return c?c.icon:'�
 const MONTHS_ALL=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember','December'];
 
 // Get all available year-month pairs
+const MONTH_NAMES_ID=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','December'];
 function getYMPairs(){
   const p=[];
   for(const[y,ms]of Object.entries(DATA))for(const m of Object.keys(ms))p.push({y,m});
-  return p;
+  // Always include current month
+  const now=new Date();
+  const cy=String(now.getFullYear());
+  const cm=MONTH_NAMES_ID[now.getMonth()];
+  if(!p.some(x=>x.y===cy&&x.m===cm))p.push({y:cy,m:cm});
+  // Sort chronologically
+  return p.sort((a,b)=>{
+    if(a.y!==b.y)return a.y.localeCompare(b.y);
+    return MONTH_NAMES_ID.indexOf(a.m)-MONTH_NAMES_ID.indexOf(b.m);
+  });
 }
-function getLastYM(){const p=getYMPairs();if(p.length===0){const now=new Date();const ms=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','December'];return{y:String(now.getFullYear()),m:ms[now.getMonth()]}}return p[p.length-1]}
+function getLastYM(){const p=getYMPairs();return p[p.length-1]}
+
+// Get ending balance of the month immediately before [year, month]
+function getPrevMonthEndingBalance(year,month){
+  const all=[];
+  for(const[y,ms]of Object.entries(DATA))for(const m of Object.keys(ms))all.push({y,m});
+  all.sort((a,b)=>{
+    if(a.y!==b.y)return a.y.localeCompare(b.y);
+    return MONTH_NAMES_ID.indexOf(a.m)-MONTH_NAMES_ID.indexOf(b.m);
+  });
+  const targetIdx=MONTH_NAMES_ID.indexOf(month);
+  let prev=null;
+  for(const ym of all){
+    const ymIdx=MONTH_NAMES_ID.indexOf(ym.m);
+    if(ym.y<year||(ym.y===year&&ymIdx<targetIdx))prev=ym;
+  }
+  if(!prev)return 0;
+  const entries=DATA[prev.y][prev.m];
+  if(!entries||!entries.length)return 0;
+  reCalc(entries);
+  return entries[entries.length-1].s||0;
+}
+
+// Add a new month/year - auto creates Uang Awal from previous month
+function addNewMonth(){
+  const ms=MONTH_NAMES_ID.map((m,i)=>`<option value="${m}">${m}</option>`).join('');
+  const now=new Date();
+  const curMonth=MONTH_NAMES_ID[now.getMonth()];
+  const curYear=now.getFullYear();
+  const years=[];
+  for(let y=curYear-1;y<=curYear+2;y++)years.push(y);
+  const yrOpts=years.map(y=>`<option value="${y}" ${y===curYear?'selected':''}>${y}</option>`).join('');
+  document.getElementById('mtitle').textContent='Tambah Bulan Baru';
+  document.getElementById('mbody').innerHTML=`
+    <div class="fr">
+      <div class="fg"><label>Bulan</label><select id="nm-month">${MONTH_NAMES_ID.map(m=>`<option value="${m}" ${m===curMonth?'selected':''}>${m}</option>`).join('')}</select></div>
+      <div class="fg"><label>Tahun</label><select id="nm-year">${yrOpts}</select></div>
+    </div>
+    <div class="fs tm" style="margin-top:8px">💡 Saldo awal akan otomatis diambil dari bulan sebelumnya</div>`;
+  document.getElementById('mfoot').innerHTML='<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="confirmAddMonth()">Tambah</button>';
+  document.getElementById('modal').classList.add('open');
+}
+function confirmAddMonth(){
+  const m=document.getElementById('nm-month').value;
+  const y=document.getElementById('nm-year').value;
+  if(!DATA[y])DATA[y]={};
+  if(!DATA[y][m]){
+    const prevBal=getPrevMonthEndingBalance(y,m);
+    DATA[y][m]=[{tgl:1,ket:'Uang awal',d:prevBal,k:0,cat:''}];
+  }
+  selYear=y;selMonth=m;
+  saveAll();closeModal();render();
+}
 
 // Donut chart drawing
 function drawDonut(canvasId,data,size=160){
@@ -426,14 +508,16 @@ function render(){
     case 'tabungan':t.textContent='Tabungan';renderTabungan(m,tr);break;
     case 'pengaturan':t.textContent='Pengaturan';renderSettings(m,tr);break;
   }
+  if(typeof updateGSStatus==='function')updateGSStatus();
 }
 
 // ===================== DASHBOARD =====================
 function renderDash(el,tr){
-  // month selector in topbar
+  // month selector in topbar (always shown, with current month + "+ Bulan Baru" option)
   const pairs=getYMPairs();
-  tr.innerHTML=`<div class="month-nav">
+  tr.innerHTML=`<div class="month-nav" style="display:flex;gap:6px;align-items:center">
     <select id="sel-ym" onchange="onYMChange()">${pairs.map(p=>`<option value="${p.y}|${p.m}" ${p.y===selYear&&p.m===selMonth?'selected':''}>${p.m} ${p.y}</option>`).join('')}</select>
+    <button class="btn btn-o btn-sm" onclick="addNewMonth()" style="padding:6px 10px;color:var(--primary);border-color:var(--primary)" title="Tambah bulan baru">+ Bulan</button>
   </div>`;
 
   const ent=DATA[selYear]?.[selMonth]||[];
@@ -584,7 +668,10 @@ function addTx(){
   const amt=parseInt(document.getElementById('af-amt').value)||0;
   if(!amt)return;
   if(!DATA[selYear])DATA[selYear]={};
-  if(!DATA[selYear][selMonth])DATA[selYear][selMonth]=[{tgl:1,ket:'Uang awal',d:0,k:0,cat:''}];
+  if(!DATA[selYear][selMonth]){
+    const prevBal=getPrevMonthEndingBalance(selYear,selMonth);
+    DATA[selYear][selMonth]=[{tgl:1,ket:'Uang awal',d:prevBal,k:0,cat:''}];
+  }
   const ent=DATA[selYear][selMonth];
   ent.push({tgl,ket:ket||getCatLabel(cat),d:type==='income'?amt:0,k:type==='expense'?amt:0,cat});
   reCalc(ent);saveAll();render();
@@ -597,6 +684,10 @@ function delTx(i){
 // ===================== LAPORAN =====================
 function renderLaporan(el,tr){
   const years=Object.keys(DATA).sort();
+  // Always include current year
+  const curYear=String(new Date().getFullYear());
+  if(!years.includes(curYear))years.push(curYear);
+  years.sort();
   tr.innerHTML=`<div class="month-nav"><select id="sel-yr" onchange="selYear=this.value;render()">${years.map(y=>`<option value="${y}" ${y===selYear?'selected':''}>${y}</option>`).join('')}</select></div>`;
 
   const months=DATA[selYear]||{};
@@ -1122,7 +1213,7 @@ let gsLastError='';
 
 const APPS_SCRIPT_CODE = `function doGet(e){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
-  const sh=ss.getSheetByName('_data')||ss.insertSheet('_data');
+  const sh=getOrCreateDataSheet(ss);
   let json='{}';
   try{const v=sh.getRange('A1').getValue();if(v)json=String(v);}catch(err){}
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
@@ -1131,11 +1222,17 @@ const APPS_SCRIPT_CODE = `function doGet(e){
 function doPost(e){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
   const json=e.postData.contents;
-  let sh=ss.getSheetByName('_data');
-  if(!sh){sh=ss.insertSheet('_data');try{sh.hideSheet();}catch(err){}}
+  const sh=getOrCreateDataSheet(ss);
   sh.getRange('A1').setValue(json);
   try{const p=JSON.parse(json);populateSheets(ss,p);}catch(err){}
   return ContentService.createTextOutput(JSON.stringify({status:'ok',time:new Date().toISOString()})).setMimeType(ContentService.MimeType.JSON);
+}
+
+function getOrCreateDataSheet(ss){
+  let sh=ss.getSheetByName('_data');
+  if(!sh)sh=ss.insertSheet('_data');
+  try{if(!sh.isSheetHidden())sh.hideSheet();}catch(err){}
+  return sh;
 }
 
 function populateSheets(ss,p){
@@ -1168,6 +1265,21 @@ function populateSheets(ss,p){
     hsRows.push([g.name,h.date,h.type==='deposit'?'Setor':'Tarik',h.amount,h.note||'']);
   }));
   hs.getRange(1,1,hsRows.length,hsRows[0].length).setValues(hsRows);
+  // Ringkasan (monthly summary)
+  let rg=ss.getSheetByName('Ringkasan')||ss.insertSheet('Ringkasan');
+  rg.clear();
+  const rgRows=[['Tahun','Bulan','Pemasukan (¥)','Pengeluaran (¥)','Selisih (¥)']];
+  if(p.DATA)for(const y in p.DATA)for(const m in p.DATA[y]){
+    let income=0,expense=0;
+    p.DATA[y][m].forEach(en=>{
+      const isUA=en.ket&&en.ket.toLowerCase().indexOf('uang awal')>=0;
+      if(!isUA){income+=en.d||0;expense+=en.k||0;}
+    });
+    rgRows.push([y,m,income,expense,income-expense]);
+  }
+  rg.getRange(1,1,rgRows.length,rgRows[0].length).setValues(rgRows);
+  // Remove default 'Sheet1' if empty
+  try{const s1=ss.getSheetByName('Sheet1');if(s1&&s1.getLastRow()<=1&&s1.getLastColumn()<=1)ss.deleteSheet(s1);}catch(err){}
 }`;
 
 async function gsLoad(showAlerts){
@@ -1264,13 +1376,28 @@ function disconnectGS(){
 
 function updateGSStatus(){
   const el=document.getElementById('gs-status');
-  if(!el)return;
-  let html='';
-  if(gsStatus==='syncing')html='<span style="color:var(--primary)">🔄 Syncing...</span>';
-  else if(gsStatus==='connected')html='<span style="color:var(--success)">✅ Connected · Last sync: '+gsLastSync+'</span>';
-  else if(gsStatus==='error')html='<span style="color:var(--danger)">❌ Error: '+gsLastError+'</span>';
-  else if(gsStatus==='idle')html='<span style="color:var(--text-sec)">⏸️ Idle</span>';
-  el.innerHTML=html;
+  if(el){
+    let html='';
+    if(gsStatus==='syncing')html='<span style="color:var(--primary)">🔄 Syncing...</span>';
+    else if(gsStatus==='connected')html='<span style="color:var(--success)">✅ Connected · Last sync: '+gsLastSync+'</span>';
+    else if(gsStatus==='error')html='<span style="color:var(--danger)">❌ Error: '+gsLastError+'</span>';
+    else if(gsStatus==='idle')html='<span style="color:var(--text-sec)">⏸️ Idle</span>';
+    el.innerHTML=html;
+  }
+  // Update floating sync chip
+  const chip=document.getElementById('sync-chip');
+  const chipText=document.getElementById('sync-chip-text');
+  if(chip&&chipText){
+    let cls='disconnected',txt='Not Connected',tip='Klik untuk setup Google Sheets';
+    if(!gsUrl){cls='disconnected';txt='Not Connected';tip='Klik untuk setup Google Sheets';}
+    else if(gsStatus==='syncing'){cls='syncing';txt='Syncing...';tip='Sedang sync ke Google Sheets';}
+    else if(gsStatus==='connected'){cls='connected';txt='Synced';tip='Last sync: '+gsLastSync;}
+    else if(gsStatus==='error'){cls='error';txt='Error';tip='Sync error: '+gsLastError+' (klik untuk lihat detail)';}
+    else if(gsStatus==='idle'){cls='connected';txt='Connected';tip='Connected · Last sync: '+gsLastSync;}
+    chip.className='sync-chip '+cls;
+    chipText.textContent=txt;
+    chip.title=tip;
+  }
 }
 
 function copyAppsScript(){
@@ -1539,12 +1666,13 @@ window.addEventListener('beforeunload',function(e){
 
 // INIT
 render();
+updateGSStatus();
 
 // Auto-load from Google Sheets on startup (if connected)
 if(gsUrl){
   setTimeout(()=>{
     gsLoad(false).then(success=>{
-      if(success)render();
+      if(success){render();updateGSStatus();}
     });
   },500);
 }
