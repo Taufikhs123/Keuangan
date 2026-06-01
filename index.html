@@ -318,8 +318,10 @@ let SAVINGS = [];
 let savIdCounter = 1;
 
 // ===================== HELPERS =====================
-const fmt = n => n==null||n===0 ? '-' : '¥'+Math.abs(n).toLocaleString('id-ID');
+let CURRENCY = localStorage.getItem('keuangan_currency') || '¥';
+const fmt = n => n==null||n===0 ? '-' : CURRENCY+Math.abs(n).toLocaleString('id-ID');
 const fmtN = n => n==null||n===0 ? '-' : Math.abs(n).toLocaleString('id-ID');
+function setCurrency(c){CURRENCY=c;localStorage.setItem('keuangan_currency',c);render();}
 const isUA = e => e.ket&&e.ket.toLowerCase().includes('uang awal');
 function calcM(ent){let i=0,o=0;ent.forEach(e=>{if(!isUA(e)){i+=e.d||0;o+=e.k||0}});return{income:i,expense:o,bal:i-o}}
 function reCalc(ent){if(!ent.length)return;let s=ent[0].d-ent[0].k;ent[0].s=s;for(let i=1;i<ent.length;i++){s+=(ent[i].d||0)-(ent[i].k||0);ent[i].s=s}}
@@ -364,6 +366,33 @@ function getPrevMonthEndingBalance(year,month){
   if(!entries||!entries.length)return 0;
   reCalc(entries);
   return entries[entries.length-1].s||0;
+}
+
+// Cascade: after editing a month, update Uang Awal of all subsequent months
+function cascadeUpdateUangAwal(){
+  const all=[];
+  for(const[y,ms]of Object.entries(DATA))for(const m of Object.keys(ms))all.push({y,m});
+  all.sort((a,b)=>{
+    if(a.y!==b.y)return a.y.localeCompare(b.y);
+    return MONTH_NAMES_ID.indexOf(a.m)-MONTH_NAMES_ID.indexOf(b.m);
+  });
+  for(let i=0;i<all.length;i++){
+    const {y,m}=all[i];
+    const entries=DATA[y][m];
+    if(!entries||!entries.length)continue;
+    reCalc(entries);
+    // Update next month's Uang Awal
+    if(i+1<all.length){
+      const next=all[i+1];
+      const nextEnt=DATA[next.y][next.m];
+      const endBal=entries[entries.length-1].s||0;
+      if(nextEnt&&nextEnt.length>0&&isUA(nextEnt[0])){
+        nextEnt[0].d=endBal;
+        nextEnt[0].k=0;
+        reCalc(nextEnt);
+      }
+    }
+  }
 }
 
 // Add a new month/year - auto creates Uang Awal from previous month
@@ -734,7 +763,7 @@ function renderDash(el,tr){
     </div>
     <div class="fr">
       <div class="fg" style="flex:2"><label>Keterangan</label><input type="text" id="af-ket" placeholder="Contoh: makan siang, gaji bulanan"></div>
-      <div class="fg"><label>Jumlah (¥)</label><input type="number" id="af-amt" min="0" placeholder="0"></div>
+      <div class="fg"><label>Jumlah (${CURRENCY})</label><input type="number" id="af-amt" min="0" placeholder="0"></div>
       <div class="fg" style="flex:0;display:flex;align-items:flex-end"><button class="btn btn-p" onclick="addTx()" style="white-space:nowrap">Simpan</button></div>
     </div>
   </div>
@@ -753,7 +782,7 @@ function renderDash(el,tr){
             <td>${isUA(e)?'<span class="badge b-saldo">SALDO</span>':e.d>0?'<span class="badge b-in">IN</span>':'<span class="badge b-out">OUT</span>'}</td>
             <td class="r mono ${e.d>0&&!isUA(e)?'ts':e.k>0?'td':''}">${e.d>0?'+'+fmt(e.d):e.k>0?'-'+fmt(e.k):'-'}</td>
             <td class="r mono" style="color:${(e.s||0)>=0?'var(--success)':'var(--danger)'}">${fmt(e.s||0)}</td>
-            <td>${!isUA(e)?`<button class="btn-x" onclick="delTx(${i})">&times;</button>`:''}</td>
+            <td style="white-space:nowrap"><button class="btn-x" onclick="openEditTx(${i})" title="Edit" style="color:var(--info)">✎</button>${!isUA(e)?`<button class="btn-x" onclick="delTx(${i})" title="Hapus">&times;</button>`:''}</td>
           </tr>`}).join('')}
         </table></div></div>
       </div>
@@ -809,11 +838,53 @@ function addTx(){
   }
   const ent=DATA[selYear][selMonth];
   ent.push({tgl,ket:ket||getCatLabel(cat),d:type==='income'?amt:0,k:type==='expense'?amt:0,cat});
-  reCalc(ent);saveAll();render();
+  cascadeUpdateUangAwal();saveAll();render();
+  // Clear inputs
+  document.getElementById('af-tgl').value='';
+  document.getElementById('af-ket').value='';
+  document.getElementById('af-amt').value='';
 }
 function delTx(i){
   const ent=DATA[selYear]?.[selMonth];if(!ent||i<1)return;
-  ent.splice(i,1);reCalc(ent);saveAll();render();
+  ent.splice(i,1);cascadeUpdateUangAwal();saveAll();render();
+}
+function openEditTx(i){
+  const ent=DATA[selYear]?.[selMonth];if(!ent||!ent[i])return;
+  const e=ent[i];
+  const isAwal=isUA(e);
+  const type=e.d>0?'income':'expense';
+  const amt=e.d>0?e.d:e.k;
+  document.getElementById('mtitle').textContent=isAwal?'Edit Saldo Awal':'Edit Transaksi';
+  document.getElementById('mbody').innerHTML=`
+    <div class="fr">
+      <div class="fg" style="flex:0 0 100px"><label>Tanggal</label><input type="number" id="et-tgl" value="${e.tgl||''}" min="1" max="31"></div>
+      <div class="fg"><label>Tipe</label><select id="et-type" ${isAwal?'disabled':''}><option value="expense" ${type==='expense'?'selected':''}>Pengeluaran</option><option value="income" ${type==='income'?'selected':''}>Pemasukan</option></select></div>
+    </div>
+    <div class="fg"><label>Kategori</label><select id="et-cat" ${isAwal?'disabled':''}>${CATEGORIES.map(c=>`<option value="${c.id}" ${c.id===e.cat?'selected':''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
+    <div class="fg"><label>Keterangan</label><input type="text" id="et-ket" value="${(e.ket||'').replace(/"/g,'&quot;')}"></div>
+    <div class="fg"><label>Jumlah (${CURRENCY})</label><input type="number" id="et-amt" value="${amt||0}" min="0"></div>
+    ${isAwal?'<div class="fs tm" style="margin-top:8px">💡 Saldo awal otomatis dari bulan sebelumnya. Edit hanya jika perlu koreksi.</div>':''}`;
+  document.getElementById('mfoot').innerHTML=`<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="saveEditTx(${i})">Simpan</button>`;
+  document.getElementById('modal').classList.add('open');
+}
+function saveEditTx(i){
+  const ent=DATA[selYear]?.[selMonth];if(!ent||!ent[i])return;
+  const e=ent[i];
+  const isAwal=isUA(e);
+  const tgl=parseInt(document.getElementById('et-tgl').value)||'';
+  const ket=document.getElementById('et-ket').value.trim();
+  const amt=parseInt(document.getElementById('et-amt').value)||0;
+  e.tgl=tgl;
+  e.ket=ket||e.ket;
+  if(isAwal){
+    e.d=amt;e.k=0;
+  }else{
+    const type=document.getElementById('et-type').value;
+    e.cat=document.getElementById('et-cat').value;
+    e.d=type==='income'?amt:0;
+    e.k=type==='expense'?amt:0;
+  }
+  cascadeUpdateUangAwal();saveAll();closeModal();render();
 }
 
 // ===================== LAPORAN =====================
@@ -908,13 +979,66 @@ function renderLaporan(el,tr){
 }
 
 // ===================== TABUNGAN =====================
+// Get unallocated tabungan pool (total from dashboard tx with cat=tabungan minus already allocated)
+function getUnallocated(){
+  let totalFromTx=0;
+  for(const ms of Object.values(DATA))for(const ent of Object.values(ms)){
+    ent.forEach(e=>{if(e.cat==='tabungan'&&e.k>0)totalFromTx+=e.k});
+  }
+  // Allocated = sum of all 'unallocated_pool' history entries (negative tracks allocation)
+  let allocated=0;
+  SAVINGS.forEach(g=>(g.history||[]).forEach(h=>{
+    if(h.source==='pool')allocated+=h.amount;
+  }));
+  return Math.max(0,totalFromTx-allocated);
+}
+function openAllocateModal(){
+  const unalloc=getUnallocated();
+  if(unalloc<=0){alert('Tidak ada saldo yang belum dialokasikan');return}
+  if(SAVINGS.length===0){alert('Buat tujuan tabungan terlebih dahulu');return}
+  document.getElementById('mtitle').textContent='Alokasikan Tabungan';
+  document.getElementById('mbody').innerHTML=`
+    <div class="fs tm" style="margin-bottom:12px">Saldo belum dialokasikan: <strong style="color:#fb8500">${fmt(unalloc)}</strong></div>
+    <div class="fg"><label>Tujuan Tabungan</label><select id="al-goal">${SAVINGS.map(g=>`<option value="${g.id}">${g.name} (${fmt(g.current)} / ${fmt(g.target)})</option>`).join('')}</select></div>
+    <div class="fg"><label>Jumlah (${CURRENCY})</label><input type="number" id="al-amt" max="${unalloc}" placeholder="0" autofocus></div>
+    <div class="fg"><label>Catatan (opsional)</label><input type="text" id="al-note" placeholder="Contoh: Alokasi bulan Mei"></div>`;
+  document.getElementById('mfoot').innerHTML=`<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="doAllocate()">Alokasikan</button>`;
+  document.getElementById('modal').classList.add('open');
+  setTimeout(()=>document.getElementById('al-amt').focus(),100);
+}
+function doAllocate(){
+  const id=parseInt(document.getElementById('al-goal').value);
+  const amt=parseInt(document.getElementById('al-amt').value)||0;
+  const note=document.getElementById('al-note').value.trim();
+  const unalloc=getUnallocated();
+  if(amt<=0){alert('Jumlah harus lebih dari 0');return}
+  if(amt>unalloc){alert('Jumlah melebihi saldo belum dialokasikan');return}
+  const g=SAVINGS.find(s=>s.id===id);if(!g)return;
+  if(!g.history)g.history=[];
+  g.current+=amt;
+  g.history.push({date:new Date().toISOString().slice(0,10),type:'deposit',amount:amt,note:note||'Alokasi dari pool',source:'pool'});
+  saveAll();closeModal();render();
+}
+
 function renderTabungan(el,tr){
   tr.innerHTML='';
   const totalTarget=SAVINGS.reduce((s,g)=>s+g.target,0);
   const totalCurrent=SAVINGS.reduce((s,g)=>s+g.current,0);
   const overallPct=totalTarget?((totalCurrent/totalTarget)*100).toFixed(1):0;
+  const unalloc=getUnallocated();
 
   let h=`
+  ${unalloc>0?`<div class="panel" style="background:linear-gradient(135deg,#fff3cd,#ffe082);border:1px solid #ffc107">
+    <div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <div class="fs fw" style="color:#856404;margin-bottom:4px">💰 Tabungan Belum Dialokasikan</div>
+        <div style="font-size:24px;font-weight:800;color:#856404">${fmt(unalloc)}</div>
+        <div class="fs" style="color:#856404;margin-top:2px">Dari transaksi dengan kategori "Tabungan" di Dashboard</div>
+      </div>
+      <button class="btn btn-p" onclick="openAllocateModal()" style="background:#fb8500;border-color:#fb8500">📊 Alokasikan ke Tujuan</button>
+    </div>
+  </div>`:''}
+
   <div class="stats-grid">
     <div class="stat-card"><div class="label">Total Tabungan</div><div class="value" style="color:#fb8500">${fmt(totalCurrent)}</div><div class="progress" style="height:6px;margin-top:6px"><div class="progress-fill" style="width:${overallPct}%;background:linear-gradient(90deg,#ffb703,#fb8500)"></div></div><div class="sub">${overallPct}% dari target</div></div>
     <div class="stat-card"><div class="label">Total Target</div><div class="value" style="color:var(--info)">${fmt(totalTarget)}</div></div>
@@ -967,8 +1091,8 @@ function openAddSaving(){
   document.getElementById('mtitle').textContent='Tambah Tujuan Tabungan';
   document.getElementById('mbody').innerHTML=`
     <div class="fg"><label>Nama Tabungan</label><input type="text" id="sf-name" placeholder="Contoh: Uang Darurat"></div>
-    <div class="fr"><div class="fg"><label>Target (¥)</label><input type="number" id="sf-target" placeholder="0"></div>
-    <div class="fg"><label>Saldo Awal (¥)</label><input type="number" id="sf-init" value="0"></div></div>
+    <div class="fr"><div class="fg"><label>Target (${CURRENCY})</label><input type="number" id="sf-target" placeholder="0"></div>
+    <div class="fg"><label>Saldo Awal (${CURRENCY})</label><input type="number" id="sf-init" value="0"></div></div>
     <div class="fg"><label>Warna</label><select id="sf-color"><option value="#fb8500">Orange</option><option value="#e63946">Merah</option><option value="#457b9d">Biru</option><option value="#2a9d8f">Teal</option><option value="#e9c46a">Emas</option><option value="#6d6875">Ungu</option><option value="#264653">Dark Teal</option><option value="#606c38">Hijau</option></select></div>`;
   document.getElementById('mfoot').innerHTML=`<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="saveSaving()">Simpan</button>`;
   document.getElementById('modal').classList.add('open');
@@ -991,8 +1115,8 @@ function openEditSaving(id){
   document.getElementById('mtitle').textContent='Edit '+g.name;
   document.getElementById('mbody').innerHTML=`
     <div class="fg"><label>Nama</label><input type="text" id="se-name" value="${g.name}"></div>
-    <div class="fr"><div class="fg"><label>Target (¥)</label><input type="number" id="se-target" value="${g.target}"></div>
-    <div class="fg"><label>Saldo Saat Ini (¥)</label><input type="number" id="se-cur" value="${g.current}"></div></div>`;
+    <div class="fr"><div class="fg"><label>Target (${CURRENCY})</label><input type="number" id="se-target" value="${g.target}"></div>
+    <div class="fg"><label>Saldo Saat Ini (${CURRENCY})</label><input type="number" id="se-cur" value="${g.current}"></div></div>`;
   document.getElementById('mfoot').innerHTML=`<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="updateSaving(${id})">Simpan</button>`;
   document.getElementById('modal').classList.add('open');
 }
@@ -1019,7 +1143,7 @@ function openSavingTxModal(id,type){
   document.getElementById('mbody').innerHTML=`
     <div class="fr">
       <div class="fg"><label>Tanggal</label><input type="date" id="st-date" value="${today}"></div>
-      <div class="fg"><label>Jumlah (¥)</label><input type="number" id="st-amt" placeholder="0" autofocus></div>
+      <div class="fg"><label>Jumlah (${CURRENCY})</label><input type="number" id="st-amt" placeholder="0" autofocus></div>
     </div>
     <div class="fg"><label>Catatan (opsional)</label><input type="text" id="st-note" placeholder="${isDeposit?'Contoh: Setoran bulanan':'Contoh: Bayar tagihan'}"></div>
     <div class="fs tm" style="margin-top:8px">Saldo saat ini: <strong>${fmt(g.current)}</strong></div>`;
@@ -1191,6 +1315,28 @@ function renderSettings(el,tr){
         </button>
         <button class="btn btn-o" onclick="resetToDefault()" style="color:var(--danger);border-color:var(--danger)">Reset ke Default</button>
       </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>💱 Mata Uang</h3></div>
+    <div class="panel-body">
+      <div class="fr" style="align-items:flex-end">
+        <div class="fg" style="flex:1"><label>Pilih Simbol Mata Uang</label>
+          <select onchange="setCurrency(this.value)">
+            <option value="¥" ${CURRENCY==='¥'?'selected':''}>¥ (Yen Jepang)</option>
+            <option value="Rp" ${CURRENCY==='Rp'?'selected':''}>Rp (Rupiah Indonesia)</option>
+            <option value="$" ${CURRENCY==='$'?'selected':''}>$ (US Dollar)</option>
+            <option value="€" ${CURRENCY==='€'?'selected':''}>€ (Euro)</option>
+            <option value="£" ${CURRENCY==='£'?'selected':''}>£ (British Pound)</option>
+            <option value="MYR" ${CURRENCY==='MYR'?'selected':''}>MYR (Ringgit Malaysia)</option>
+            <option value="SGD" ${CURRENCY==='SGD'?'selected':''}>SGD (Singapore Dollar)</option>
+            <option value="₩" ${CURRENCY==='₩'?'selected':''}>₩ (Korean Won)</option>
+          </select>
+        </div>
+        <div class="fg" style="flex:0 0 200px"><label>Contoh</label><div style="padding:8px 12px;background:#f1f8f5;border-radius:6px;font-weight:600;font-size:14px">${fmt(125000)}</div></div>
+      </div>
+      <div class="fs tm" style="margin-top:8px">💡 Hanya mengubah simbol tampilan. Format angka tetap sama.</div>
     </div>
   </div>
 
