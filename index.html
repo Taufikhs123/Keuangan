@@ -406,6 +406,88 @@ function confirmAddMonth(){
   saveAll();closeModal();render();
 }
 
+// ===== COPY MONTH (duplicate transactions to another month) =====
+function openCopyMonth(){
+  const srcEnt=DATA[selYear]?.[selMonth]||[];
+  const nonAwalCount=srcEnt.filter(e=>!isUA(e)).length;
+  if(nonAwalCount===0){
+    alert('Bulan ini belum punya transaksi untuk disalin.');
+    return;
+  }
+  const now=new Date();
+  const curYear=now.getFullYear();
+  const years=[];
+  for(let y=curYear-1;y<=curYear+2;y++)years.push(y);
+  const yrOpts=years.map(y=>`<option value="${y}" ${String(y)===selYear?'selected':''}>${y}</option>`).join('');
+  const mOpts=MONTH_NAMES_ID.map(m=>`<option value="${m}">${m}</option>`).join('');
+  document.getElementById('mtitle').textContent='Copy '+selMonth+' '+selYear+' ke Bulan Lain';
+  document.getElementById('mbody').innerHTML=`
+    <div class="fs tm" style="margin-bottom:12px;padding:10px;background:var(--bg);border-radius:6px">
+      📋 <strong>${nonAwalCount}</strong> transaksi dari <strong>${selMonth} ${selYear}</strong> akan disalin.<br>
+      <span style="color:var(--text-sec)">Saldo Awal bulan tujuan tetap diambil dari bulan sebelumnya (tidak ikut disalin).</span>
+    </div>
+    <div class="fr">
+      <div class="fg"><label>Bulan Tujuan</label><select id="cm-month">${mOpts}</select></div>
+      <div class="fg"><label>Tahun Tujuan</label><select id="cm-year">${yrOpts}</select></div>
+    </div>
+    <div class="fg" style="margin-top:8px">
+      <label>Jika bulan tujuan sudah ada transaksi:</label>
+      <select id="cm-mode">
+        <option value="append">Tambahkan (gabung dengan yang sudah ada)</option>
+        <option value="replace">Ganti semua (hapus yang lama, isi dengan yang baru)</option>
+      </select>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px;background:var(--bg);border-radius:6px;cursor:pointer">
+      <input type="checkbox" id="cm-zero" style="width:auto;margin:0;cursor:pointer">
+      <span class="fs">Kosongkan jumlah (salin struktur saja: tanggal, kategori, keterangan)</span>
+    </label>`;
+  document.getElementById('mfoot').innerHTML='<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="doCopyMonth()">📋 Salin Sekarang</button>';
+  document.getElementById('modal').classList.add('open');
+  // Default target = current month
+  const cm=MONTH_NAMES_ID[now.getMonth()];
+  document.getElementById('cm-month').value=cm;
+}
+
+async function doCopyMonth(){
+  const targetY=document.getElementById('cm-year').value;
+  const targetM=document.getElementById('cm-month').value;
+  const mode=document.getElementById('cm-mode').value;
+  const zeroAmt=document.getElementById('cm-zero').checked;
+  if(targetY===selYear&&targetM===selMonth){
+    alert('Bulan tujuan sama dengan bulan sumber. Pilih bulan lain.');
+    return;
+  }
+  if(!await ensureCanEdit())return;
+  const srcEnt=DATA[selYear]?.[selMonth]||[];
+  const toCopy=srcEnt.filter(e=>!isUA(e)).map(e=>({
+    tgl:e.tgl,
+    ket:e.ket,
+    cat:e.cat,
+    d:zeroAmt?0:(e.d||0),
+    k:zeroAmt?0:(e.k||0)
+  }));
+  if(!DATA[targetY])DATA[targetY]={};
+  const existing=DATA[targetY][targetM];
+  if(!existing||existing.length===0){
+    // Fresh target month: start with Uang Awal from prev month
+    const prevBal=getPrevMonthEndingBalance(targetY,targetM);
+    DATA[targetY][targetM]=[{tgl:1,ket:'Uang awal',d:prevBal,k:0,cat:''}].concat(toCopy);
+  }else{
+    if(mode==='replace'){
+      // Keep only Uang Awal, replace rest
+      const ua=existing[0]&&isUA(existing[0])?existing[0]:{tgl:1,ket:'Uang awal',d:getPrevMonthEndingBalance(targetY,targetM),k:0,cat:''};
+      DATA[targetY][targetM]=[ua].concat(toCopy);
+    }else{
+      // Append
+      DATA[targetY][targetM]=existing.concat(toCopy);
+    }
+  }
+  // Navigate to target month so user sees result
+  selYear=targetY;selMonth=targetM;
+  cascadeUpdateUangAwal();saveAll();closeModal();render();
+  alert('✅ '+toCopy.length+' transaksi berhasil disalin ke '+targetM+' '+targetY+'.');
+}
+
 // ===== Month/Year Picker (Dashboard) =====
 let _ymPickerYear=null;
 function renderYMPicker(){
@@ -862,7 +944,12 @@ function renderDash(el,tr){
 
   <div class="row">
     <div class="col" style="flex:2;min-width:280px">
-      <div class="panel"><div class="panel-head"><h3>Transaksi ${selMonth} ${selYear}</h3><span class="fs tm">${ent.length} transaksi</span></div>
+      <div class="panel"><div class="panel-head"><h3>Transaksi ${selMonth} ${selYear}</h3>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="fs tm">${ent.length} transaksi</span>
+          <button class="btn btn-o btn-sm" onclick="openCopyMonth()" title="Salin transaksi bulan ini ke bulan lain" style="color:var(--info);border-color:var(--info)">📋 Copy ke Bulan Lain</button>
+        </div>
+      </div>
         <div class="panel-body np"><div class="scroll-y"><table>
           <tr><th>Tgl</th><th>Keterangan</th><th>Kategori</th><th>Tipe</th><th class="r">Jumlah</th><th class="r">Saldo</th><th></th></tr>
           ${ent.map((e,i)=>{
