@@ -14,14 +14,15 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Keuangan">
 
-<!-- Icon (SVG, scales to any size, used by browser tab, iOS, Android) -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='96' fill='%232d6a4f'/><g fill='%23fff'><rect x='100' y='290' width='62' height='140' rx='10'/><rect x='180' y='220' width='62' height='210' rx='10'/><rect x='260' y='160' width='62' height='270' rx='10'/><rect x='340' y='100' width='62' height='330' rx='10'/></g><text x='256' y='100' font-size='90' fill='%23fff' text-anchor='middle' font-family='Arial Black,sans-serif' font-weight='900'>¥</text></svg>">
+<!-- Icons (PNG files in repo, used by browser tab, iOS, Android install) -->
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 
-<!-- Apple Touch Icon (iOS Home Screen) - needs to be a real image format, use SVG fallback -->
-<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='96' fill='%232d6a4f'/><g fill='%23fff'><rect x='100' y='290' width='62' height='140' rx='10'/><rect x='180' y='220' width='62' height='210' rx='10'/><rect x='260' y='160' width='62' height='270' rx='10'/><rect x='340' y='100' width='62' height='330' rx='10'/></g><text x='256' y='100' font-size='90' fill='%23fff' text-anchor='middle' font-family='Arial Black,sans-serif' font-weight='900'>¥</text></svg>">
+<!-- Apple Touch Icon (iOS Home Screen) -->
+<link rel="apple-touch-icon" href="icon-512.png">
 
-<!-- Web App Manifest (inline as data URI for single-file portability) -->
-<link rel="manifest" href='data:application/manifest+json;utf8,{"name":"Keuangan","short_name":"Keuangan","description":"Personal Finance Manager","start_url":"./","display":"standalone","orientation":"portrait","background_color":"%23ffffff","theme_color":"%232d6a4f","icons":[{"src":"data:image/svg+xml;utf8,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27><rect width=%27512%27 height=%27512%27 rx=%2796%27 fill=%27%232d6a4f%27/><g fill=%27%23fff%27><rect x=%27100%27 y=%27290%27 width=%2762%27 height=%27140%27 rx=%2710%27/><rect x=%27180%27 y=%27220%27 width=%2762%27 height=%27210%27 rx=%2710%27/><rect x=%27260%27 y=%27160%27 width=%2762%27 height=%27270%27 rx=%2710%27/><rect x=%27340%27 y=%27100%27 width=%2762%27 height=%27330%27 rx=%2710%27/></g></svg>","sizes":"any","type":"image/svg+xml","purpose":"any"}]}'>
+<!-- Web App Manifest (separate file - required for Android "Install app") -->
+<link rel="manifest" href="manifest.json">
 
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -2138,6 +2139,13 @@ window.addEventListener('beforeunload',function(e){
 // INIT
 render();
 updateGSStatus();
+
+// Register Service Worker (enables Android "Install app" + offline loading)
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('sw.js').catch(err=>console.warn('SW register failed:',err));
+  });
+}
 
 // Auto-load from Google Sheets on startup, with pending-local check
 setTimeout(()=>{checkPendingOnInit();},500);
