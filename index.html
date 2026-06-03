@@ -120,6 +120,9 @@ th.r,td.r{text-align:right}
 .btn-o{background:transparent;color:var(--text-sec);border-color:var(--border)}.btn-o:hover{background:var(--bg)}
 .btn-sm{padding:4px 10px;font-size:12px}
 .btn-x{background:none;border:none;color:var(--text-light);cursor:pointer;padding:3px 6px;border-radius:4px;font-size:15px}.btn-x:hover{color:var(--danger);background:#f8d7da}
+.btn-step{width:28px;height:28px;border-radius:6px;border:1px solid var(--border);background:var(--white);color:var(--primary);font-size:18px;font-weight:700;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;padding:0}
+.btn-step:hover{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-step:active{transform:scale(.92)}
 
 /* FORM */
 .fg{margin-bottom:12px}
@@ -1423,17 +1426,32 @@ const STOCK_PRESETS=[
   {n:'Deterjen',i:'🧺'},{n:'Gas',i:'🔥'}
 ];
 
+// Derive status from quantity vs minimum threshold (with legacy fallback)
+function stockStatus(s){
+  if(typeof s.qty!=='number')return s.status||'ok'; // legacy items (no qty)
+  const m=typeof s.min==='number'?s.min:0;
+  if(s.qty<=0)return 'out';
+  if(s.qty<=m)return 'low';
+  return 'ok';
+}
+// Quantity to restock to so the item leaves the shopping list
+function stockRestockQty(s){const m=typeof s.min==='number'?s.min:0;return m>0?m+1:1;}
+// Display "3 kg" or just "3"
+function stockQtyText(s){
+  if(typeof s.qty!=='number')return '';
+  return s.qty+(s.unit?' '+s.unit:'');
+}
+
 function renderStok(el,tr){
   tr.innerHTML='';
-  const toBuy=STOCK.filter(s=>s.status==='low'||s.status==='out');
-  const outCount=STOCK.filter(s=>s.status==='out').length;
-  const lowCount=STOCK.filter(s=>s.status==='low').length;
+  const withStatus=STOCK.map(s=>({s,st:stockStatus(s)}));
+  const toBuy=withStatus.filter(x=>x.st==='low'||x.st==='out');
+  const outCount=withStatus.filter(x=>x.st==='out').length;
+  const lowCount=withStatus.filter(x=>x.st==='low').length;
   // Sort shopping list: out first, then low; sort all items: to-buy first then by name
-  const buySorted=toBuy.slice().sort((a,b)=>(a.status==='out'?0:1)-(b.status==='out'?0:1)||a.name.localeCompare(b.name));
-  const allSorted=STOCK.slice().sort((a,b)=>{
-    const rank=s=>s.status==='out'?0:s.status==='low'?1:2;
-    return rank(a)-rank(b)||a.name.localeCompare(b.name);
-  });
+  const buySorted=toBuy.slice().sort((a,b)=>(a.st==='out'?0:1)-(b.st==='out'?0:1)||a.s.name.localeCompare(b.s.name));
+  const rank=st=>st==='out'?0:st==='low'?1:2;
+  const allSorted=withStatus.slice().sort((a,b)=>rank(a.st)-rank(b.st)||a.s.name.localeCompare(b.s.name));
 
   let h=`
   <div class="stats-grid">
@@ -1455,18 +1473,18 @@ function renderStok(el,tr){
     <div class="panel-body">
       ${toBuy.length===0?'<div style="text-align:center;padding:24px;color:var(--text-sec)">✅ Semua stok cukup! Tidak ada yang perlu dibeli.</div>':
       `<div style="display:flex;flex-direction:column;gap:8px">
-        ${buySorted.map(s=>{const st=STOCK_STATUS[s.status];return`
+        ${buySorted.map(({s,st:k})=>{const st=STOCK_STATUS[k];const qt=stockQtyText(s);return`
         <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:${st.bg};border:1px solid ${st.border};border-radius:8px">
           <input type="checkbox" onchange="markBought(${s.id})" title="Tandai sudah dibeli" style="width:20px;height:20px;flex-shrink:0;cursor:pointer">
           <span style="font-size:22px;flex-shrink:0">${s.icon||'📦'}</span>
           <div style="flex:1;min-width:0">
             <div class="fw" style="color:${st.color}">${s.name}</div>
-            ${s.note?`<div class="fs" style="color:${st.color};opacity:.8">${s.note}</div>`:''}
+            <div class="fs" style="color:${st.color};opacity:.85">Sisa: ${qt||'-'}${typeof s.min==='number'?' · min '+s.min:''}${s.note?' · '+s.note:''}</div>
           </div>
           <span class="badge" style="background:${st.border};color:#fff;flex-shrink:0">${st.label}</span>
         </div>`}).join('')}
       </div>
-      <div class="fs tm" style="margin-top:10px">💡 Centang barang yang sudah dibeli untuk mengembalikan status ke "Cukup".</div>`}
+      <div class="fs tm" style="margin-top:10px">💡 Centang barang yang sudah dibeli (otomatis isi ulang stok), atau pakai tombol +/− di tabel bawah saat memakai barang.</div>`}
     </div>
   </div>
 
@@ -1475,13 +1493,16 @@ function renderStok(el,tr){
     <div class="panel-head"><h3>➕ Tambah Barang</h3></div>
     <div class="panel-body">
       <div class="fr" style="align-items:flex-end;gap:8px">
-        <div class="fg" style="flex:0 0 70px"><label>Icon</label><input type="text" id="sk-icon" placeholder="📦" maxlength="2" style="text-align:center;font-size:18px"></div>
-        <div class="fg" style="flex:1"><label>Nama Barang</label><input type="text" id="sk-name" placeholder="Contoh: Ayam, Sabun..." onkeydown="if(event.key==='Enter')addStockItem()"></div>
-        <div class="fg" style="flex:0 0 130px"><label>Status</label><select id="sk-status"><option value="ok">Cukup</option><option value="low">Menipis</option><option value="out">Habis</option></select></div>
+        <div class="fg" style="flex:0 0 64px"><label>Icon</label><input type="text" id="sk-icon" placeholder="📦" maxlength="2" style="text-align:center;font-size:18px"></div>
+        <div class="fg" style="flex:1;min-width:120px"><label>Nama Barang</label><input type="text" id="sk-name" placeholder="Contoh: Ayam, Sabun..." onkeydown="if(event.key==='Enter')addStockItem()"></div>
+        <div class="fg" style="flex:0 0 90px"><label>Stok</label><input type="number" id="sk-qty" value="1" min="0"></div>
+        <div class="fg" style="flex:0 0 90px"><label>Min.</label><input type="number" id="sk-min" value="1" min="0" title="Tandai perlu beli jika stok ≤ angka ini"></div>
+        <div class="fg" style="flex:0 0 90px"><label>Satuan</label><input type="text" id="sk-unit" placeholder="kg, pcs"></div>
         <button class="btn btn-p" onclick="addStockItem()">Tambah</button>
       </div>
+      <div class="fs tm" style="margin-top:6px">💡 "Min." = ambang batas. Jika stok ≤ Min, barang otomatis masuk Daftar Belanja.</div>
       <div style="margin-top:12px">
-        <div class="fs tm" style="margin-bottom:6px">Cepat tambah:</div>
+        <div class="fs tm" style="margin-bottom:6px">Cepat tambah (stok awal 2, min 1):</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
           ${STOCK_PRESETS.map(p=>`<button class="btn btn-o btn-sm" onclick="quickAddStock('${p.n}','${p.i}')" style="font-size:12px">${p.i} ${p.n}</button>`).join('')}
         </div>
@@ -1491,14 +1512,19 @@ function renderStok(el,tr){
 
   <!-- ALL ITEMS -->
   <div class="panel">
-    <div class="panel-head"><h3>📦 Semua Barang</h3><span class="fs tm">${STOCK.length} barang · klik status untuk ubah</span></div>
+    <div class="panel-head"><h3>📦 Semua Barang</h3><span class="fs tm">${STOCK.length} barang · pakai +/− untuk ubah stok</span></div>
     <div class="panel-body np"><div class="scroll-y">
     ${STOCK.length===0?'<div style="text-align:center;padding:30px;color:var(--text-sec)">Belum ada barang. Tambahkan barang kebutuhan rutin di atas.</div>':
-    `<table><tr><th></th><th>Nama</th><th>Status</th><th>Catatan</th><th></th></tr>
-    ${allSorted.map(s=>{const st=STOCK_STATUS[s.status];return`<tr>
+    `<table><tr><th></th><th>Nama</th><th class="r">Stok</th><th>Status</th><th>Catatan</th><th></th></tr>
+    ${allSorted.map(({s,st:k})=>{const st=STOCK_STATUS[k];const q=typeof s.qty==='number'?s.qty:0;return`<tr>
       <td style="font-size:20px;width:40px">${s.icon||'📦'}</td>
-      <td class="fw">${s.name}</td>
-      <td><button class="badge" onclick="cycleStock(${s.id})" title="Klik untuk ubah status" style="background:${st.bg};color:${st.color};border:1px solid ${st.border};cursor:pointer">${st.label}</button></td>
+      <td class="fw">${s.name}${typeof s.min==='number'?`<div class="fs tm">min ${s.min}${s.unit?' '+s.unit:''}</div>`:''}</td>
+      <td><div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">
+        <button class="btn-step" onclick="adjustStock(${s.id},-1)" title="Kurangi">−</button>
+        <span class="fw" style="min-width:42px;text-align:center">${q}${s.unit?'<span class="fs tm"> '+s.unit+'</span>':''}</span>
+        <button class="btn-step" onclick="adjustStock(${s.id},1)" title="Tambah">+</button>
+      </div></td>
+      <td><span class="badge" style="background:${st.bg};color:${st.color};border:1px solid ${st.border}">${st.label}</span></td>
       <td class="fs">${s.note||'-'}</td>
       <td style="white-space:nowrap"><button class="btn-x" onclick="openEditStock(${s.id})" title="Edit" style="color:var(--info)">✎</button><button class="btn-x" onclick="delStockItem(${s.id})" title="Hapus">&times;</button></td>
     </tr>`}).join('')}
@@ -1511,10 +1537,12 @@ function renderStok(el,tr){
 async function addStockItem(){
   const name=document.getElementById('sk-name').value.trim();
   const icon=document.getElementById('sk-icon').value.trim();
-  const status=document.getElementById('sk-status').value;
+  const qty=parseInt(document.getElementById('sk-qty').value);
+  const min=parseInt(document.getElementById('sk-min').value);
+  const unit=document.getElementById('sk-unit').value.trim();
   if(!name){alert('Masukkan nama barang');return}
   if(!await ensureCanEdit())return;
-  STOCK.push({id:stockIdCounter++,name,icon:icon||'📦',status,note:''});
+  STOCK.push({id:stockIdCounter++,name,icon:icon||'📦',qty:isNaN(qty)?0:qty,min:isNaN(min)?0:min,unit,note:''});
   saveAll();render();
 }
 async function quickAddStock(name,icon){
@@ -1524,51 +1552,62 @@ async function quickAddStock(name,icon){
     return;
   }
   if(!await ensureCanEdit())return;
-  STOCK.push({id:stockIdCounter++,name,icon,status:'ok',note:''});
+  STOCK.push({id:stockIdCounter++,name,icon,qty:2,min:1,unit:'',note:''});
   saveAll();render();
 }
-async function cycleStock(id){
+async function adjustStock(id,delta){
   const s=STOCK.find(x=>x.id===id);if(!s)return;
+  if(typeof s.qty!=='number')s.qty=0;
+  const nv=s.qty+delta;
+  if(nv<0)return; // don't go negative
   if(!await ensureCanEdit())return;
-  s.status=s.status==='ok'?'low':s.status==='low'?'out':'ok';
+  s.qty=nv;
   saveAll();render();
 }
 async function markBought(id){
   const s=STOCK.find(x=>x.id===id);if(!s)return;
   if(!await ensureCanEdit())return;
-  s.status='ok';
+  s.qty=stockRestockQty(s); // restock just above minimum so it leaves the list
   saveAll();render();
 }
 async function markAllBought(){
-  if(!confirm('Tandai semua barang di daftar belanja sebagai sudah dibeli (status jadi Cukup)?'))return;
+  if(!confirm('Tandai semua barang di daftar belanja sebagai sudah dibeli (stok diisi ulang)?'))return;
   if(!await ensureCanEdit())return;
-  STOCK.forEach(s=>{if(s.status==='low'||s.status==='out')s.status='ok'});
+  STOCK.forEach(s=>{const st=stockStatus(s);if(st==='low'||st==='out')s.qty=stockRestockQty(s);});
   saveAll();render();
 }
 function openEditStock(id){
   const s=STOCK.find(x=>x.id===id);if(!s)return;
+  const q=typeof s.qty==='number'?s.qty:0;
+  const m=typeof s.min==='number'?s.min:0;
   document.getElementById('mtitle').textContent='Edit Barang';
   document.getElementById('mbody').innerHTML=`
     <div class="fr" style="align-items:flex-end">
       <div class="fg" style="flex:0 0 80px"><label>Icon</label><input type="text" id="ek-icon" value="${(s.icon||'').replace(/"/g,'&quot;')}" maxlength="2" style="text-align:center;font-size:18px"></div>
       <div class="fg" style="flex:1"><label>Nama Barang</label><input type="text" id="ek-name" value="${(s.name||'').replace(/"/g,'&quot;')}"></div>
     </div>
-    <div class="fg"><label>Status</label><select id="ek-status">
-      <option value="ok" ${s.status==='ok'?'selected':''}>Cukup</option>
-      <option value="low" ${s.status==='low'?'selected':''}>Menipis</option>
-      <option value="out" ${s.status==='out'?'selected':''}>Habis</option>
-    </select></div>
-    <div class="fg"><label>Catatan (opsional)</label><input type="text" id="ek-note" value="${(s.note||'').replace(/"/g,'&quot;')}" placeholder="Contoh: beli 2 kg, merk tertentu..."></div>`;
+    <div class="fr">
+      <div class="fg"><label>Stok Saat Ini</label><input type="number" id="ek-qty" value="${q}" min="0"></div>
+      <div class="fg"><label>Minimum (ambang)</label><input type="number" id="ek-min" value="${m}" min="0"></div>
+      <div class="fg"><label>Satuan</label><input type="text" id="ek-unit" value="${(s.unit||'').replace(/"/g,'&quot;')}" placeholder="kg, pcs, botol"></div>
+    </div>
+    <div class="fg"><label>Catatan (opsional)</label><input type="text" id="ek-note" value="${(s.note||'').replace(/"/g,'&quot;')}" placeholder="Contoh: merk tertentu, beli di toko X..."></div>
+    <div class="fs tm" style="margin-top:8px">💡 Status otomatis: Habis jika stok 0, Menipis jika stok ≤ Minimum, selain itu Cukup.</div>`;
   document.getElementById('mfoot').innerHTML=`<button class="btn btn-o" onclick="closeModal()">Batal</button><button class="btn btn-p" onclick="saveEditStock(${id})">Simpan</button>`;
   document.getElementById('modal').classList.add('open');
 }
 async function saveEditStock(id){
   const s=STOCK.find(x=>x.id===id);if(!s)return;
   if(!await ensureCanEdit())return;
+  const q=parseInt(document.getElementById('ek-qty').value);
+  const m=parseInt(document.getElementById('ek-min').value);
   s.icon=document.getElementById('ek-icon').value.trim()||'📦';
   s.name=document.getElementById('ek-name').value.trim()||s.name;
-  s.status=document.getElementById('ek-status').value;
+  s.qty=isNaN(q)?0:q;
+  s.min=isNaN(m)?0:m;
+  s.unit=document.getElementById('ek-unit').value.trim();
   s.note=document.getElementById('ek-note').value.trim();
+  delete s.status; // remove legacy field; status is now derived
   saveAll();closeModal();render();
 }
 async function delStockItem(id){
@@ -1579,12 +1618,12 @@ async function delStockItem(id){
   saveAll();render();
 }
 function copyShoppingList(){
-  const toBuy=STOCK.filter(s=>s.status==='low'||s.status==='out')
-    .sort((a,b)=>(a.status==='out'?0:1)-(b.status==='out'?0:1)||a.name.localeCompare(b.name));
+  const toBuy=STOCK.map(s=>({s,st:stockStatus(s)})).filter(x=>x.st==='low'||x.st==='out')
+    .sort((a,b)=>(a.st==='out'?0:1)-(b.st==='out'?0:1)||a.s.name.localeCompare(b.s.name));
   if(!toBuy.length){alert('Daftar belanja kosong.');return}
   const today=new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
-  const txt='🛒 Daftar Belanja ('+today+')\n'+toBuy.map(s=>`☐ ${s.icon||''} ${s.name}${s.note?' ('+s.note+')':''}${s.status==='out'?' [HABIS]':''}`).join('\n');
-  const done=()=>{const btn=event&&event.target;alert('✅ Daftar belanja disalin!\n\n'+txt);};
+  const txt='🛒 Daftar Belanja ('+today+')\n'+toBuy.map(({s,st})=>`☐ ${s.icon||''} ${s.name}${s.note?' ('+s.note+')':''}${st==='out'?' [HABIS]':' [sisa '+(stockQtyText(s)||'0')+']'}`).join('\n');
+  const done=()=>{alert('✅ Daftar belanja disalin!\n\n'+txt);};
   if(navigator.clipboard&&navigator.clipboard.writeText){
     navigator.clipboard.writeText(txt).then(done).catch(()=>{prompt('Salin daftar belanja:',txt);});
   }else{prompt('Salin daftar belanja:',txt);}
@@ -1943,9 +1982,14 @@ function populateSheets(ss,p){
   // Stok Belanja
   let sk=ss.getSheetByName('Stok Belanja')||ss.insertSheet('Stok Belanja');
   sk.clear();
-  const skRows=[['Icon','Nama','Status','Catatan']];
+  const skRows=[['Icon','Nama','Stok','Min','Satuan','Status','Catatan']];
   const stMap={ok:'Cukup',low:'Menipis',out:'Habis'};
-  (p.STOCK||[]).forEach(it=>skRows.push([it.icon||'',it.name||'',stMap[it.status]||it.status||'',it.note||'']));
+  (p.STOCK||[]).forEach(it=>{
+    var st;
+    if(typeof it.qty==='number'){st=it.qty<=0?'out':(it.qty<=(it.min||0)?'low':'ok');}
+    else{st=it.status||'ok';}
+    skRows.push([it.icon||'',it.name||'',(typeof it.qty==='number'?it.qty:''),(typeof it.min==='number'?it.min:''),it.unit||'',stMap[st]||st,it.note||'']);
+  });
   sk.getRange(1,1,skRows.length,skRows[0].length).setValues(skRows);
   // Remove default 'Sheet1' if empty
   try{const s1=ss.getSheetByName('Sheet1');if(s1&&s1.getLastRow()<=1&&s1.getLastColumn()<=1)ss.deleteSheet(s1);}catch(err){}
@@ -2136,10 +2180,10 @@ function buildWorkbook(){
   XLSX.utils.book_append_sheet(wb,wsSum,'Ringkasan');
   // Sheet: Stok Belanja
   const stMap={ok:'Cukup',low:'Menipis',out:'Habis'};
-  const stockRows=[['Icon','Nama','Status','Catatan']];
-  STOCK.forEach(it=>stockRows.push([it.icon||'',it.name||'',stMap[it.status]||it.status||'',it.note||'']));
+  const stockRows=[['Icon','Nama','Stok','Min','Satuan','Status','Catatan']];
+  STOCK.forEach(it=>stockRows.push([it.icon||'',it.name||'',(typeof it.qty==='number'?it.qty:''),(typeof it.min==='number'?it.min:''),it.unit||'',stMap[stockStatus(it)]||'',it.note||'']));
   const wsStock=XLSX.utils.aoa_to_sheet(stockRows);
-  wsStock['!cols']=[{wch:6},{wch:24},{wch:12},{wch:30}];
+  wsStock['!cols']=[{wch:6},{wch:24},{wch:8},{wch:8},{wch:10},{wch:12},{wch:30}];
   XLSX.utils.book_append_sheet(wb,wsStock,'Stok Belanja');
   return wb;
 }
