@@ -2,7 +2,7 @@
 // Strategy: network-first for the app shell (so you always get the latest
 // version from GitHub when online), cache fallback when offline.
 
-const CACHE = 'keuangan-v3-calm-notices-20261022';
+const CACHE = 'keuangan-v3-auto-sync-current-month-20261022';
 const ASSETS = [
   './',
   './index.html',

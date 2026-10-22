@@ -158,7 +158,7 @@ setMoodThresholds=function(){const h=Number(field('mt-happy')),n=Number(field('m
 resetMoodThresholds=function(){MOOD_THRESHOLDS={...MOOD_DEFAULTS};saveAll();render()};
 toggleMascot=function(on){MASCOT_ON=on;saveAll();render()};
 resetToDefault=function(){if(!confirm('Reset data di perangkat ini? Cadangkan dahulu. Koneksi cloud akan diputus dan data cloud tidak dihapus.'))return;
-  clearTimeout(gsSyncTimer);gsUrl='';for(const k of Object.values(LS_KEYS))localStorage.removeItem(k);for(const k of [SNAPSHOT_KEY,META_KEY,'keuangan_gs_url','keuangan_pending_local'])localStorage.removeItem(k);location.reload()};
+  clearTimeout(gsSyncTimer);if(!forgetSyncToken(true))return;gsUrl='';for(const k of Object.values(LS_KEYS))localStorage.removeItem(k);for(const k of [SNAPSHOT_KEY,META_KEY,'keuangan_gs_url','keuangan_pending_local'])localStorage.removeItem(k);location.reload()};
 window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY&&e.newValue){const r=JSON.parse(e.newValue);if(r.stamp!==diskStamp){tabConflict=true;clearTimeout(gsSyncTimer);announce('Data diubah pada tab lain. Ekspor cadangan lalu muat ulang sebelum melanjutkan.',true)}}});
 
 // Full-fidelity workbook. Readable sheets are views; _Backup is the restore source.
@@ -185,31 +185,75 @@ importExcel=async function(evt){const file=evt.target.files[0];evt.target.value=
   try{const wb=XLSX.read(await file.arrayBuffer(),{type:'array'}),s=stateFromWorkbook(wb);
     if(!confirm('Pulihkan seluruh data dari '+file.name+'? Data perangkat sekarang akan diganti. Salinan pemulihan sebelumnya disimpan lokal.'))return;
     if(!await ensureCanEdit())return;
-    localStorage.setItem('keuangan_before_restore',JSON.stringify(stateSnapshot()));applyState(s);saveAll();const l=getLastYM();selYear=l.y;selMonth=l.m;go('pengaturan');announce('Cadangan lengkap berhasil dipulihkan.');
+    localStorage.setItem('keuangan_before_restore',JSON.stringify(stateSnapshot()));applyState(s);saveAll();const l=getCurrentYM();selYear=l.y;selMonth=l.m;go('pengaturan');announce('Cadangan lengkap berhasil dipulihkan.');
   }catch(e){showFormError('Pemulihan dibatalkan: '+e.message)}
 };
 
 // Revision protocol v3. Never send a snapshot to an unverified legacy backend.
-function syncToken(){return sessionStorage.getItem('keuangan_sync_token')||''}
-function setSyncToken(){sessionStorage.setItem('keuangan_sync_token',field('sync-token'));announce('Kunci disimpan untuk sesi ini. Tekan Muat/Sync untuk menghubungkan.');}
+const SYNC_CREDENTIAL_KEY='keuangan_sync_credential_v1';
+let volatileSyncCredential=null,syncAuthVersion=0,autoSyncTimer=null,autoSyncRunning=false,autoSyncLast=0,autoSyncDeferred=false,autoSyncEnabled=false;
+function syncEndpoint(){try{if(!urlValid(gsUrl))return '';const u=new URL(gsUrl);return u.origin+u.pathname}catch(_){return ''}}
+function rememberedSyncCredential(){
+  try{const c=JSON.parse(localStorage.getItem(SYNC_CREDENTIAL_KEY)||'null');return c&&typeof c.token==='string'&&c.token.trim()&&urlValid(c.url)?c:null}catch(_){return null}
+}
+function syncToken(){
+  const url=syncEndpoint();if(!url)return '';
+  if(volatileSyncCredential?.url===url)return volatileSyncCredential.token;
+  try{const token=sessionStorage.getItem('keuangan_sync_token'),bound=sessionStorage.getItem('keuangan_sync_token_url');
+    if(token&&(!bound||bound===url)){if(!bound)sessionStorage.setItem('keuangan_sync_token_url',url);return token}
+  }catch(_){}
+  const saved=rememberedSyncCredential();return saved?.url===url?saved.token:'';
+}
+function clearSessionSyncToken(){volatileSyncCredential=null;try{sessionStorage.removeItem('keuangan_sync_token');sessionStorage.removeItem('keuangan_sync_token_url')}catch(_){}}
+function resetSyncConnection(){
+  ++syncAuthVersion;clearTimeout(gsSyncTimer);clearTimeout(autoSyncTimer);autoSyncDeferred=false;syncRevision=null;syncSessionReady=false;gsStatus=gsUrl?'idle':'';updateGSStatus();
+}
+function refreshSyncKeyControls(){
+  const saved=rememberedSyncCredential(),remembered=saved?.url===syncEndpoint(),active=!!syncToken();
+  const status=document.getElementById('sync-key-status');if(status)status.textContent=remembered?'Kunci diingat pada browser ini. Sync otomatis saat dibuka, kembali aktif, atau ada perubahan.':active?'Kunci tersedia untuk sesi ini saja.':'Belum ada kunci untuk koneksi ini.';
+  const checkbox=document.getElementById('sync-remember');if(checkbox)checkbox.checked=remembered;
+  const forget=document.getElementById('sync-forget');if(forget)forget.disabled=!saved&&!active;
+}
+function setSyncToken(){
+  const url=syncEndpoint(),token=field('sync-token').trim()||syncToken(),remember=!!document.getElementById('sync-remember')?.checked;
+  if(!url){announce('Hubungkan URL Apps Script yang valid terlebih dahulu.',true);return false}
+  if(!token){announce('Masukkan kunci akses terlebih dahulu.',true);return false}
+  try{if(remember)localStorage.setItem(SYNC_CREDENTIAL_KEY,JSON.stringify({url,token}));else localStorage.removeItem(SYNC_CREDENTIAL_KEY)}
+  catch(_){announce('Kunci belum disimpan. Browser menolak penyimpanan; coba lagi atau gunakan mode sesi tanpa centang Ingat kunci.',true);return false}
+  resetSyncConnection();volatileSyncCredential={url,token};
+  try{sessionStorage.setItem('keuangan_sync_token',token);sessionStorage.setItem('keuangan_sync_token_url',url)}catch(_){}
+  const input=document.getElementById('sync-token');if(input)input.value='';refreshSyncKeyControls();
+  announce(remember?'Kunci diingat di perangkat ini. Sedang memeriksa koneksi.':'Kunci dipakai untuk sesi ini. Sedang memeriksa koneksi.');
+  requestAutoSync('key',0);return true;
+}
+function forgetSyncToken(silent=false){
+  try{localStorage.removeItem(SYNC_CREDENTIAL_KEY)}catch(_){announce('Browser menolak penghapusan kunci. Hapus izin penyimpanan kunci melalui browser sebelum berbagi perangkat.',true);return false}
+  clearSessionSyncToken();resetSyncConnection();refreshSyncKeyControls();const input=document.getElementById('sync-token');if(input)input.value='';
+  if(!silent)announce('Kunci dilupakan. Data keuangan tetap tersimpan; sync berhenti sampai kunci dimasukkan lagi.');return true;
+}
+window.addEventListener('storage',e=>{if(e.key===SYNC_CREDENTIAL_KEY){clearSessionSyncToken();resetSyncConnection();refreshSyncKeyControls();if(syncToken())requestAutoSync('key',0)}});
 function urlValid(s){try{const u=new URL(s);return u.protocol==='https:'&&u.hostname==='script.google.com'&&/^\/macros\/s\/[^/]+\/exec$/.test(u.pathname)}catch(_){return false}}
 async function apiSync(action,extra={}){
   if(!urlValid(gsUrl))throw Error('URL Apps Script tidak valid.');
+  const auth=syncAuthVersion,url=gsUrl,token=syncToken();if(!token)throw Error('Masukkan kunci akses di Pengaturan.');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
   try{
-    const res=await fetch(gsUrl,{method:'POST',redirect:'follow',signal:controller.signal,body:JSON.stringify({protocol:3,action,token:syncToken(),...extra})});
+    const res=await fetch(url,{method:'POST',redirect:'follow',signal:controller.signal,body:JSON.stringify({protocol:3,action,token,...extra})});
     if(!res.ok)throw Error('HTTP '+res.status);const p=await res.json();
+    if(auth!==syncAuthVersion||url!==gsUrl)throw Error('Koneksi berubah saat permintaan berlangsung.');
     if(p.protocol!==3||p.ok!==true){if(p.code==='conflict'){syncSessionReady=false;throw Error('Konflik perangkat: server lebih baru. Ekspor cadangan lokal, lalu muat data server. Tidak ada data yang ditimpa.')}throw Error(p.error||'Respons server tidak mengakui penyimpanan. Perbarui Apps Script dan kunci akses.')}
     if(!Number.isSafeInteger(p.revision)||p.revision<0)throw Error('Revisi server tidak valid.');return p;
   }finally{clearTimeout(timer)}
 }
 async function handshake(){
+  const auth=syncAuthVersion;
   const r=await fetch(gsUrl+'?action=hello&t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error('Gagal memeriksa versi server.');const p=await r.json();if(p.protocol!==3)throw Error('Backend lama terdeteksi. Perbarui deployment Apps Script sebelum sync. Data lokal tetap aman.');
+  if(auth!==syncAuthVersion)throw Error('Koneksi berubah saat permintaan berlangsung.');
 }
 function syncFailure(e){gsStatus='error';gsLastError=e.message;updateGSStatus();announce(e.message,true)}
 gsSave=async function(){
   if(!gsUrl||syncBusy||startupError||tabConflict)return false;
-  syncBusy=true;gsStatus='syncing';updateGSStatus();
+  const auth=syncAuthVersion;syncBusy=true;gsStatus='syncing';updateGSStatus();
   try{
     await handshake();
     if(syncRevision===null){const r=await apiSync('read');const bound=syncMeta.url===gsUrl&&Number.isSafeInteger(syncMeta.revision);
@@ -223,29 +267,53 @@ gsSave=async function(){
     syncRevision=result.revision;syncMeta={url:gsUrl,revision:syncRevision};localStorage.setItem(META_KEY,JSON.stringify(syncMeta));
     syncSessionReady=true;gsStatus='connected';gsLastSync=new Date().toLocaleString('id-ID');
     persistState(localSeq!==seq);updateGSStatus();return true;
-  }catch(e){syncFailure(e);return false}finally{syncBusy=false;if(pendingLocal()&&gsStatus==='connected')scheduleGSSync()}
+  }catch(e){if(auth===syncAuthVersion)syncFailure(e);return false}finally{syncBusy=false;if(auth!==syncAuthVersion&&syncToken())requestAutoSync('key',0);else if(pendingLocal()&&gsStatus==='connected')scheduleGSSync()}
 };
-gsLoad=async function(showAlerts,discard=false){
+gsLoad=async function(showAlerts,discard=false,automatic=false){
   if(!gsUrl||syncBusy||startupError||tabConflict)return false;
+  if(automatic&&pendingLocal())return false;
   if(pendingLocal()&&!discard){if(!confirm('Ada perubahan lokal belum terkirim. Ekspor cadangan sebelum mengganti dengan server. Lanjutkan mengambil server?'))return false;discard=true}
-  syncBusy=true;const seq=localSeq;
+  const auth=syncAuthVersion;syncBusy=true;const seq=localSeq;gsStatus='syncing';updateGSStatus();
   try{
     await handshake();const r=await apiSync('read');
     if(localSeq!==seq)throw Error('Ada perubahan selama pengambilan data. Snapshot server tidak diterapkan.');
-    if(!r.state){syncRevision=r.revision;syncMeta={url:gsUrl,revision:r.revision};syncSessionReady=true;gsStatus='connected';announce('Server kosong. Data lokal belum diubah; gunakan Push untuk mengirim.');return true}
+    if(automatic&&syncReadDeferred()){autoSyncDeferred=true;gsStatus='idle';updateGSStatus();return false}
+    if(!r.state){syncRevision=r.revision;syncMeta={url:gsUrl,revision:r.revision};syncSessionReady=true;gsStatus='connected';updateGSStatus();announce('Server kosong. Data lokal belum diubah; gunakan Push untuk mengirim.');return true}
     const s=Finance.validate(r.state);if(pendingLocal())localStorage.setItem('keuangan_before_cloud_reload',JSON.stringify(stateSnapshot()));
     applyState(s);syncRevision=r.revision;syncMeta={url:gsUrl,revision:r.revision};localStorage.setItem(META_KEY,JSON.stringify(syncMeta));persistState(false);
     syncSessionReady=true;gsStatus='connected';gsLastSync=new Date().toLocaleString('id-ID');render();updateGSStatus();if(showAlerts)announce('Data berhasil diambil dari server.',false,{kind:'success'});return true;
-  }catch(e){syncFailure(e);return false}finally{syncBusy=false}
+  }catch(e){if(auth===syncAuthVersion)syncFailure(e);return false}finally{syncBusy=false;if(auth!==syncAuthVersion&&syncToken())requestAutoSync('key',0)}
 };
-scheduleGSSync=function(){if(!gsUrl||!syncSessionReady||tabConflict)return;clearTimeout(gsSyncTimer);gsSyncTimer=setTimeout(()=>gsSave(),1500)};
+function syncReadDeferred(){return document.getElementById('modal')?.classList.contains('open')||/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)||typeof uiTripEditing!=='undefined'&&uiTripEditing}
+async function syncAutomatically(reason='resume'){
+  if(startupError||tabConflict||!gsUrl||!syncToken()||navigator.onLine===false)return false;
+  if(syncBusy||autoSyncRunning){autoSyncDeferred=true;return false}
+  if(!pendingLocal()&&syncReadDeferred()){autoSyncDeferred=true;return false}
+  autoSyncRunning=true;autoSyncDeferred=false;const seq=localSeq;autoSyncLast=Date.now();
+  try{return pendingLocal()?await gsSave():await gsLoad(false,false,true)}
+  finally{autoSyncRunning=false;if(pendingLocal()&&localSeq!==seq)requestAutoSync('change',1500)}
+}
+function requestAutoSync(reason='resume',delay=400){
+  if(startupError||tabConflict||!gsUrl||!syncToken())return;
+  clearTimeout(autoSyncTimer);
+  const wait=['resume','focus','online'].includes(reason)?Math.max(delay,2000-(Date.now()-autoSyncLast)):delay;
+  autoSyncTimer=setTimeout(()=>syncAutomatically(reason),wait);
+}
+scheduleGSSync=function(){if(!gsUrl||tabConflict||!syncToken())return;clearTimeout(gsSyncTimer);gsSyncTimer=setTimeout(()=>syncAutomatically('change'),1500)};
 checkPendingOnInit=async function(){
-  if(startupError||!gsUrl)return;if(!syncToken()){announce('Masukkan kunci sync di Pengaturan untuk sesi ini. Data lokal tersedia.');return}
-  if(pendingLocal()){const r=await confirmAsync({title:'Perubahan lokal belum terkirim',message:'Pilih Upload untuk mengirim dengan pemeriksaan revisi. Jika server lebih baru, pengiriman ditolak dan data lokal tetap tersedia.',yesText:'Upload',noText:'Nanti'});if(r.ok)await gsSave()}
-  else await gsLoad(false);
+  if(startupError||!gsUrl)return;if(!syncToken()){announce('Masukkan kunci sync di Pengaturan. Centang Ingat kunci untuk perangkat pribadi. Data lokal tetap tersedia.');return}
+  return syncAutomatically('startup');
 };
-connectGS=async function(){const u=field('gs-url-input').trim();if(!urlValid(u)){showFormError('Gunakan URL https://script.google.com/macros/s/.../exec');return}gsUrl=u;localStorage.setItem('keuangan_gs_url',u);syncRevision=null;syncSessionReady=false;syncMeta={};render();announce('Masukkan kunci akses di Pengaturan, lalu pilih Muat atau Push.');};
-disconnectGS=function(){clearTimeout(gsSyncTimer);gsUrl='';syncRevision=null;syncSessionReady=false;localStorage.removeItem('keuangan_gs_url');sessionStorage.removeItem('keuangan_sync_token');render()};
+function enableAutoSync(){
+  if(autoSyncEnabled)return;autoSyncEnabled=true;
+  window.addEventListener('focus',()=>requestAutoSync('focus'));
+  window.addEventListener('pageshow',e=>{if(e.persisted)requestAutoSync('resume')});
+  window.addEventListener('online',()=>requestAutoSync('online',0));
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestAutoSync('resume')});
+  document.addEventListener('focusout',()=>{if(autoSyncDeferred)requestAutoSync('resume')});
+}
+connectGS=async function(){const u=field('gs-url-input').trim();if(!urlValid(u)){showFormError('Gunakan URL https://script.google.com/macros/s/.../exec');return}if(u!==gsUrl)clearSessionSyncToken();gsUrl=u;localStorage.setItem('keuangan_gs_url',u);resetSyncConnection();syncMeta={};render();if(syncToken())requestAutoSync('key',0);else announce('Masukkan kunci akses di Pengaturan untuk memulai sync otomatis.');};
+disconnectGS=function(){if(!forgetSyncToken(true))return;gsUrl='';gsStatus='';localStorage.removeItem('keuangan_gs_url');render()};
 
 // Accessibility: labels, keyboard navigation, dialog focus trap, and safe error text.
 let modalReturnFocus=null,modalResolve=null;
@@ -277,4 +345,8 @@ function downloadRecovery(){
 }
 const savingsRenderBase=renderTabungan;
 renderTabungan=function(el,tr){savingsRenderBase(el,tr);const deficit=getSavingsPools().deficit;if(deficit>0){const n=document.createElement('div');n.className='form-errors';n.setAttribute('role','alert');n.textContent='Alokasi lama melebihi dana aktual sebesar '+fmt(deficit)+'. Periksa riwayat dan batalkan alokasi yang belum didanai sebelum mengurangi sumber dana.';el.prepend(n)}};
-renderSettings=function(el,tr){settingsBase(el,tr);const p=document.createElement('section');p.className='panel';p.innerHTML='<div class="panel-head"><h3>Keamanan & versi sync</h3></div><div class="panel-body"><p>Sync versi 3 memakai revisi server dan kunci akses. Salin Apps Script terbaru, set Script Property <code>SYNC_TOKEN</code>, lalu deploy versi baru.</p><div class="fg"><label for="sync-token">Kunci akses (sesi ini)</label><input id="sync-token" type="password" autocomplete="off"></div><button class="btn btn-p" onclick="setSyncToken()">Gunakan kunci</button><p class="fs tm">Kunci tidak disertakan di cadangan. Data dibaca/ditulis setelah pemeriksaan versi.</p><a href="AppsScript.gs" download>Unduh Apps Script terbaru</a><p><button class="btn btn-o" onclick="downloadRecovery()">Unduh data lokal mentah</button></p><p class="fs tm">Untuk penyelamatan bila validasi/migrasi gagal; bukan pengganti cadangan Excel lengkap.</p></div>';el.prepend(p);};
+renderSettings=function(el,tr){
+  settingsBase(el,tr);const p=document.createElement('section');p.className='panel';
+  p.innerHTML='<div class="panel-head"><h3>Keamanan & sinkronisasi otomatis</h3></div><div class="panel-body"><p>Sync versi 3 memakai revisi server dan kunci akses. Gunakan Apps Script terbaru dengan Script Property <code>SYNC_TOKEN</code>.</p><div class="fg"><label for="sync-token">Kunci akses</label><input id="sync-token" name="keuangan-sync-token" type="password" autocomplete="current-password" aria-describedby="sync-key-help sync-key-status" placeholder="Masukkan kunci, atau kosongkan jika sudah tersedia"></div><label class="sync-remember-option" for="sync-remember"><input id="sync-remember" type="checkbox" aria-describedby="sync-key-help"><span>Ingat kunci di perangkat ini</span></label><p id="sync-key-help" class="fs tm">Hanya untuk perangkat pribadi. Kunci disimpan di penyimpanan browser, bukan enkripsi khusus; skrip pada situs yang sama dapat mengaksesnya. Tidak ikut cadangan atau data keuangan yang disinkronkan.</p><p id="sync-key-status" class="fs tm" role="status" aria-live="polite"></p><div class="sync-key-actions"><button class="btn btn-p" onclick="setSyncToken()">Gunakan kunci</button><button id="sync-forget" class="btn btn-o" onclick="forgetSyncToken()">Lupakan kunci</button></div><p class="fs tm">Data diperiksa saat aplikasi dibuka, kembali aktif, atau internet pulih. Perubahan dikirim otomatis setelah sekitar 1,5 detik. Konflik ditahan; data lokal tidak diganti otomatis jika ada perubahan yang belum terkirim.</p><a href="AppsScript.gs" download>Unduh Apps Script terbaru</a><p><button class="btn btn-o" onclick="downloadRecovery()">Unduh data lokal mentah</button></p><p class="fs tm">Untuk penyelamatan bila validasi/migrasi gagal; bukan pengganti cadangan Excel lengkap.</p></div>';
+  el.prepend(p);refreshSyncKeyControls();
+};

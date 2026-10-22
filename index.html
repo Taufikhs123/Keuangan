@@ -578,6 +578,7 @@ function getYMPairs(){
   });
 }
 function getLastYM(){const p=getYMPairs();return p[p.length-1]}
+function getCurrentYM(){const now=new Date();return{y:String(now.getFullYear()),m:MONTH_NAMES_ID[now.getMonth()]}}
 
 // Get ending balance of the month immediately before [year, month]
 function getPrevMonthEndingBalance(year,month){
@@ -1056,7 +1057,7 @@ function drawProgressDonut(canvasId,goals,size=200){
 // ===================== STATE =====================
 let view={page:'dashboard'};
 let selYear, selMonth;
-(function(){const l=getLastYM();selYear=l.y;selMonth=l.m})();
+(function(){const l=getCurrentYM();selYear=l.y;selMonth=l.m})();
 
 const DONUT_COLORS=['#264653','#2a9d8f','#e9c46a','#f4a261','#e76f51','#606c38','#e63946','#457b9d','#bc6c25','#6d6875','#dda15e','#283618','#a8dadc','#f1faee','#9b2226','#780000'];
 
@@ -1124,7 +1125,7 @@ async function ensureCanEdit(){
     title:'Tidak Tersambung ke Cloud',
     icon:'⚠️',
     message:`<div class="fw" style="color:#856404;margin-bottom:8px">Aplikasi belum tersambung ke Google Sheets.</div>
-      <div>Perubahan akan disimpan sementara di <strong>localStorage</strong> perangkat ini dan <strong>tidak akan diupload</strong> ke server.</div>
+      <div>Perubahan akan disimpan sementara di <strong>localStorage</strong> perangkat ini dan <strong>belum diunggah</strong> ke server. Jika URL dan kunci tersedia, pengiriman akan dicoba otomatis setelah koneksi pulih dan terverifikasi. Konflik antarperangkat akan ditahan agar data tidak tertimpa.</div>
       <div style="margin-top:10px">Lanjutkan?</div>`,
     yesText:'Ya, lanjutkan',
     noText:'Batal',
@@ -2938,7 +2939,7 @@ function importExcel(evt){
       for(const months of Object.values(DATA))for(const ent of Object.values(months))reCalc(ent);
 
       // Update state
-      const lm=getLastYM();selYear=lm.y;selMonth=lm.m;
+      const lm=getCurrentYM();selYear=lm.y;selMonth=lm.m;
       lastSavedInfo='Diimport dari: '+file.name+' ('+new Date().toLocaleString('id-ID')+')';
       saveAll();render();go('pengaturan');
       alert('Data berhasil diimport dari '+file.name+'!');
