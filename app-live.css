@@ -1,5 +1,10 @@
 /* Production shell bindings for the approved prototype components. */
 :root{--sidebar-w:224px;--primary:#25634b;--primary-dark:#163e2f;--text:#1e3029;--text-sec:#53685f;--border:#dce7e0;--border-light:#e3eae5;--card:#fff}
+:root{--ledger-estimate-bg:#fff8e8;--ledger-estimate-ink:#80551d;--ledger-estimate-accent:#c18b36;--ledger-estimate-line:#e9c990}
+.live-workspace .ledger-table .estimated-row>td{background:var(--ledger-estimate-bg)}
+.live-workspace .ledger-table .estimated-row .ledger-name{box-shadow:inset 3px 0 var(--ledger-estimate-accent)}
+.live-workspace .ledger-table .estimated-row summary>strong{color:var(--ledger-estimate-ink)}
+.live-workspace .ledger-estimate-tag{display:inline-block;margin-left:4px;padding:1px 6px;border:1px solid var(--ledger-estimate-line);border-radius:6px;font-size:12px;font-weight:600;line-height:1.5;color:var(--ledger-estimate-ink);background:var(--ledger-estimate-bg);white-space:normal}
 .btn.btn-p{background:var(--primary);border-color:var(--primary);color:#fff}
 .btn.btn-p:hover{background:var(--primary-dark);border-color:var(--primary-dark)}
 .sync-remember-option{display:flex;align-items:center;gap:10px;min-height:44px;cursor:pointer;font-size:14px}
