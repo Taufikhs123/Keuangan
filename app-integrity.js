@@ -16,6 +16,20 @@ function applyState(s){
 }
 let noticeTimer=null,noticeRemaining=0,noticeStarted=0,noticeReturnFocus=null;
 const noticeHolds=new Set();
+const NOTICE_PREF_KEY='keuangan_status_notifications';
+function routineNoticesEnabled(){try{return localStorage.getItem(NOTICE_PREF_KEY)!=='0'}catch(_){return true}}
+function setRoutineNotices(enabled){
+  try{localStorage.setItem(NOTICE_PREF_KEY,enabled?'1':'0')}
+  catch(_){const input=document.getElementById('status-notifications');if(input)input.checked=routineNoticesEnabled();announce('Preferensi notifikasi gagal disimpan. Periksa izin penyimpanan browser.',true);return}
+  if(!enabled&&!document.getElementById('app-notice')?.classList.contains('error'))dismissNotice();
+}
+function noticeSummary(message,error){
+  if(error){if(/konflik|tab lain|revisi/i.test(message))return 'Konflik data';if(/penyimpanan.*gagal/i.test(message))return 'Penyimpanan gagal';return message.length>55?'Perlu diperiksa':message}
+  if(/^Tersimpan di Google Sheets/.test(message))return 'Tersimpan di Sheets';
+  if(/^Data berhasil diambil dari server/.test(message))return 'Data diperbarui';
+  if(/^Catatan tersimpan di perangkat/.test(message))return 'Tersimpan lokal · menunggu sync';
+  return message.length>55?'Informasi aplikasi':message;
+}
 function pauseNotice(reason){
   noticeHolds.add(reason);
   if(noticeTimer!==null){clearTimeout(noticeTimer);noticeTimer=null;noticeRemaining=Math.max(0,noticeRemaining-(performance.now()-noticeStarted))}
@@ -32,19 +46,27 @@ function dismissNotice(){
   if(restore){const target=noticeReturnFocus?.isConnected?noticeReturnFocus:document.getElementById('main');if(target){if(!target.hasAttribute('tabindex')&&target.id==='main')target.tabIndex=-1;target.focus({preventScroll:true})}}
 }
 function announce(message,error=false,options={}){
+  message=String(message);
+  if(!error&&!options.sticky&&!routineNoticesEnabled())return;
   let n=document.getElementById('app-notice');
   if(!n){
     n=document.createElement('div');n.id='app-notice';n.hidden=true;
     const text=document.createElement('span');text.id='app-notice-message';text.setAttribute('aria-atomic','true');
+    const more=document.createElement('button');more.type='button';more.className='app-notice-more';more.textContent='Detail';more.setAttribute('aria-controls','app-notice-detail');more.setAttribute('aria-expanded','false');
+    const detail=document.createElement('div');detail.id='app-notice-detail';detail.hidden=true;
+    more.addEventListener('click',()=>{const open=detail.hidden;detail.hidden=!open;more.setAttribute('aria-expanded',String(open));more.textContent=open?'Ringkas':'Detail';if(open)pauseNotice('detail');else resumeNotice('detail')});
     const close=document.createElement('button');close.type='button';close.className='app-notice-close';close.setAttribute('aria-label','Tutup notifikasi');close.textContent='×';close.addEventListener('click',dismissNotice);
-    n.append(text,close);document.body.append(n);
+    const line=document.createElement('div');line.className='app-notice-line';line.append(text,more,close);n.append(line,detail);document.body.append(n);
     n.addEventListener('pointerenter',()=>pauseNotice('pointer'));n.addEventListener('pointerleave',()=>resumeNotice('pointer'));
     n.addEventListener('focusin',()=>pauseNotice('focus'));n.addEventListener('focusout',e=>{if(!n.contains(e.relatedTarget))resumeNotice('focus')});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseNotice('background');else resumeNotice('background')});
   }
   clearTimeout(noticeTimer);noticeTimer=null;noticeHolds.clear();
   if(!n.contains(document.activeElement))noticeReturnFocus=document.activeElement;
-  const text=n.querySelector('#app-notice-message');text.setAttribute('role',error?'alert':'status');text.setAttribute('aria-live',error?'assertive':'polite');text.textContent=message;
+  const summary=options.summary||noticeSummary(message,error),shortened=summary!==message;
+  const text=n.querySelector('#app-notice-message');text.setAttribute('role',error?'alert':'status');text.setAttribute('aria-live',error?'assertive':'polite');text.replaceChildren();
+  if(shortened){const visible=document.createElement('span');visible.textContent=summary;visible.setAttribute('aria-hidden','true');const full=document.createElement('span');full.className='notice-sr-only';full.textContent=message;text.append(visible,full)}else text.textContent=message;
+  const more=n.querySelector('.app-notice-more');more.hidden=!shortened;more.textContent='Detail';more.setAttribute('aria-expanded','false');const detail=n.querySelector('#app-notice-detail');detail.textContent=message;detail.hidden=true;
   const success=options.kind==='success';n.className='app-notice'+(error?' error':success?' success':'');n.hidden=false;
   // Errors stay until dismissed. Success/info pause while being read or focused.
   noticeRemaining=error||options.sticky?0:(success?4000:6000);
@@ -80,7 +102,9 @@ ensureCanEdit=async function(){
   if(startupError||tabConflict){alert('Perubahan diblokir untuk melindungi data. '+(startupError||'Data berubah pada tab lain; muat ulang setelah menyimpan cadangan.'));return false}
   return ensureEditOriginal();
 };
-isSyncOk=()=>!!gsUrl&&syncSessionReady&&gsStatus==='connected';
+// Editing may queue behind an in-flight request on an already verified connection.
+// This is not a claim that pending edits have been acknowledged by the server.
+isSyncOk=()=>!!gsUrl&&!!syncToken()&&navigator.onLine!==false&&syncSessionReady&&['connected','syncing','idle'].includes(gsStatus);
 let mutationBusy=false;
 async function mutate(action){
   if(mutationBusy)return false;
@@ -261,8 +285,10 @@ gsSave=async function(){
       else if(r.state===null&&r.revision===0)syncRevision=0;
       else throw Error('Server memiliki data. Muat data server lebih dahulu atau ekspor lokal untuk peninjauan konflik.');
     }
+    if(tabConflict||startupError)throw Error('Data perangkat berubah pada tab lain atau gagal dimuat. Unggahan ditahan; muat ulang setelah mencadangkan.');
     const seq=localSeq,s=Finance.validate(stateSnapshot()),requestId=Finance.uid();
     const result=await apiSync('write',{baseRevision:syncRevision,state:s,requestId});
+    if(tabConflict||startupError)throw Error('Data perangkat berubah saat pengiriman. Konfirmasi server tidak diterapkan ke penyimpanan lokal; cadangkan lalu muat ulang.');
     if(result.requestId!==requestId||result.revision!==syncRevision+1)throw Error('Pengakuan snapshot tidak cocok. Pending tetap disimpan.');
     syncRevision=result.revision;syncMeta={url:gsUrl,revision:syncRevision};localStorage.setItem(META_KEY,JSON.stringify(syncMeta));
     syncSessionReady=true;gsStatus='connected';gsLastSync=new Date().toLocaleString('id-ID');
@@ -276,7 +302,13 @@ gsLoad=async function(showAlerts,discard=false,automatic=false){
   const auth=syncAuthVersion;syncBusy=true;const seq=localSeq;gsStatus='syncing';updateGSStatus();
   try{
     await handshake();const r=await apiSync('read');
-    if(localSeq!==seq)throw Error('Ada perubahan selama pengambilan data. Snapshot server tidak diterapkan.');
+    if(tabConflict||startupError)throw Error('Data perangkat berubah pada tab lain atau gagal dimuat. Snapshot server tidak diterapkan; cadangkan lalu muat ulang.');
+    if(localSeq!==seq){
+      // A valid local edit can finish while a read is in flight. Discard that
+      // stale response, not the edit, and keep its original revision for CAS.
+      gsStatus=syncSessionReady?'connected':'idle';updateGSStatus();if(pendingLocal())scheduleGSSync();
+      if(showAlerts)announce('Ada perubahan lokal selama pengambilan data. Salinan server tidak diterapkan; perubahan lokal tetap menunggu unggahan.');return false;
+    }
     if(automatic&&syncReadDeferred()){autoSyncDeferred=true;gsStatus='idle';updateGSStatus();return false}
     if(!r.state){syncRevision=r.revision;syncMeta={url:gsUrl,revision:r.revision};syncSessionReady=true;gsStatus='connected';updateGSStatus();announce('Server kosong. Data lokal belum diubah; gunakan Push untuk mengirim.');return true}
     const s=Finance.validate(r.state);if(pendingLocal())localStorage.setItem('keuangan_before_cloud_reload',JSON.stringify(stateSnapshot()));
@@ -348,5 +380,6 @@ renderTabungan=function(el,tr){savingsRenderBase(el,tr);const deficit=getSavings
 renderSettings=function(el,tr){
   settingsBase(el,tr);const p=document.createElement('section');p.className='panel';
   p.innerHTML='<div class="panel-head"><h3>Keamanan & sinkronisasi otomatis</h3></div><div class="panel-body"><p>Sync versi 3 memakai revisi server dan kunci akses. Gunakan Apps Script terbaru dengan Script Property <code>SYNC_TOKEN</code>.</p><div class="fg"><label for="sync-token">Kunci akses</label><input id="sync-token" name="keuangan-sync-token" type="password" autocomplete="current-password" aria-describedby="sync-key-help sync-key-status" placeholder="Masukkan kunci, atau kosongkan jika sudah tersedia"></div><label class="sync-remember-option" for="sync-remember"><input id="sync-remember" type="checkbox" aria-describedby="sync-key-help"><span>Ingat kunci di perangkat ini</span></label><p id="sync-key-help" class="fs tm">Hanya untuk perangkat pribadi. Kunci disimpan di penyimpanan browser, bukan enkripsi khusus; skrip pada situs yang sama dapat mengaksesnya. Tidak ikut cadangan atau data keuangan yang disinkronkan.</p><p id="sync-key-status" class="fs tm" role="status" aria-live="polite"></p><div class="sync-key-actions"><button class="btn btn-p" onclick="setSyncToken()">Gunakan kunci</button><button id="sync-forget" class="btn btn-o" onclick="forgetSyncToken()">Lupakan kunci</button></div><p class="fs tm">Data diperiksa saat aplikasi dibuka, kembali aktif, atau internet pulih. Perubahan dikirim otomatis setelah sekitar 1,5 detik. Konflik ditahan; data lokal tidak diganti otomatis jika ada perubahan yang belum terkirim.</p><a href="AppsScript.gs" download>Unduh Apps Script terbaru</a><p><button class="btn btn-o" onclick="downloadRecovery()">Unduh data lokal mentah</button></p><p class="fs tm">Untuk penyelamatan bila validasi/migrasi gagal; bukan pengganti cadangan Excel lengkap.</p></div>';
-  el.prepend(p);refreshSyncKeyControls();
+  const notices=document.createElement('section');notices.className='panel';notices.innerHTML='<div class="panel-head"><h3>Notifikasi status</h3></div><div class="panel-body"><label class="sync-remember-option" for="status-notifications"><input id="status-notifications" type="checkbox" aria-describedby="status-notifications-help"><span>Tampilkan notifikasi status</span></label><p id="status-notifications-help" class="fs tm">Pesan singkat di kanan bawah, seperti “Tersimpan di Sheets”. Khusus perangkat ini. Peringatan penting (gagal menyimpan atau konflik data) dan konfirmasi offline tetap muncul. Indikator sync tetap aktif.</p></div>';const toggle=notices.querySelector('input');toggle.checked=routineNoticesEnabled();toggle.addEventListener('change',()=>setRoutineNotices(toggle.checked));
+  el.prepend(p,notices);refreshSyncKeyControls();
 };

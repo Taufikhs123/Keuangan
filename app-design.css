@@ -12,7 +12,13 @@ button{touch-action:manipulation}
 .form-errors{padding:16px;background:#fff0ef;border:1px solid #c24034;border-radius:12px;color:#85261e;margin-bottom:16px}
 .app-notice{position:fixed;bottom:calc(12px + env(safe-area-inset-bottom));left:max(12px,calc((100vw - 680px)/2));right:max(12px,calc((100vw - 680px)/2));padding:14px 18px;background:#173f2f;color:white;border-radius:12px;z-index:500;box-shadow:0 6px 24px #0003;font-size:14px;max-height:30vh;overflow:auto}
 .app-notice.error{background:#7c2d24}
-.app-notice{display:flex;align-items:center;gap:12px;padding:10px 12px 10px 18px}
+.app-notice{display:block;padding:4px 6px 4px 14px}
+.app-notice-line{display:flex;align-items:center;gap:8px}
+.notice-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.app-notice-more{flex-shrink:0;min-width:44px;min-height:44px;padding:0 4px;border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-decoration:underline;cursor:pointer;touch-action:manipulation}
+.app-notice-more[hidden],#app-notice-detail[hidden]{display:none!important}
+.app-notice-more:focus-visible{outline:2px solid currentColor;outline-offset:-2px}
+#app-notice-detail{padding:4px 8px 12px 0;overflow-wrap:anywhere;line-height:1.5}
 .app-notice[hidden]{display:none!important}
 #app-notice-message{flex:1;min-width:0;overflow-wrap:anywhere}
 .app-notice-close{flex:0 0 44px;width:44px;height:44px;display:grid;place-items:center;border:0;border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:24px;cursor:pointer;touch-action:manipulation}
