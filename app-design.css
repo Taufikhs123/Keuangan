@@ -10,8 +10,11 @@ button{touch-action:manipulation}
 .modal .btn,.modal .btn-x{min-height:44px;min-width:44px}
 .modal-b .fg textarea,.fg textarea{width:100%;border:1px solid var(--border);padding:10px;border-radius:8px;resize:vertical}
 .form-errors{padding:16px;background:#fff0ef;border:1px solid #c24034;border-radius:12px;color:#85261e;margin-bottom:16px}
-.app-notice{position:fixed;bottom:calc(12px + env(safe-area-inset-bottom));left:max(12px,calc((100vw - 680px)/2));right:max(12px,calc((100vw - 680px)/2));padding:14px 18px;background:#173f2f;color:white;border-radius:12px;z-index:500;box-shadow:0 6px 24px #0003;font-size:14px;max-height:30vh;overflow:auto}
-.app-notice.error{background:#7c2d24}
+/* Own positioning here, rather than relying on a later stylesheet override.
+   The ID also wins over a stale app-live.css during an incremental update. */
+#app-notice.app-notice{position:fixed;bottom:calc(20px + env(safe-area-inset-bottom));left:auto;right:max(12px,env(safe-area-inset-right));width:max-content;max-width:min(360px,calc(100vw - 24px));padding:4px 6px 4px 14px;background:#173f2f;color:white;border-radius:14px;z-index:500;box-shadow:0 6px 24px #0003;font-size:12px;line-height:1.45;max-height:30vh;overflow:auto}
+@media(max-width:768px){#app-notice.app-notice{bottom:calc(84px + env(safe-area-inset-bottom));max-width:min(300px,calc(100vw - 24px))}}
+#app-notice.app-notice.error{background:#7c2d24}
 .app-notice{display:block;padding:4px 6px 4px 14px}
 .app-notice-line{display:flex;align-items:center;gap:8px}
 .notice-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}

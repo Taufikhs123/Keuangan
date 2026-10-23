@@ -2,20 +2,20 @@
 // Strategy: network-first for the app shell (so you always get the latest
 // version from GitHub when online), cache fallback when offline.
 
-const CACHE = 'keuangan-v3-safe-sync-compact-notices-20261022';
+const CACHE = 'keuangan-v3-notice-corner-20261023';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './finance-core.js',
-  './app-integrity.js',
+  './app-integrity.js?v=20261023-notice-corner',
   './trips.js',
   './app-boot.js',
-  './app-design.css',
+  './app-design.css?v=20261023-notice-corner',
   './app-shell.css',
   './app-panels.css',
   './app-appearance.css',
-  './app-live.css',
+  './app-live.css?v=20261023-notice-corner',
   './app-appearance.js',
   './app-savings-ui.js',
   './app-ui.js',
@@ -53,7 +53,9 @@ self.addEventListener('fetch', e => {
 
   // Never intercept Google Apps Script calls — always go to network
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin || url.search || !ASSETS.some(p => new URL(p,self.location.href).pathname === url.pathname)) return;
+  // Only exact app-shell URLs (including their release version) are cached.
+  // Preview queries and cloud endpoints must never enter this cache.
+  if (url.origin !== self.location.origin || !ASSETS.some(p => new URL(p,self.location.href).href === url.href)) return;
 
   e.respondWith(
     fetch(req)
